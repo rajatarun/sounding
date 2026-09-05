@@ -1,19 +1,23 @@
 /**
  * App.jsx — Runtime shell.
  *
- * Same responsibility the old main.js carried (screens, level/trial state,
- * the engine instances) rewritten around React state instead of direct DOM
- * writes, and dressed in Tantu — the loom substrate, the selvedge shuttle,
- * cards, buttons, meters — rather than hand-rolled CSS.
+ * Screens, level/trial state, the engine instances, and the resume point.
+ * Dressed in Tantu — the loom substrate, the selvedge shuttle, cards, buttons,
+ * meters — rather than hand-rolled CSS.
  */
-import { useMemo, useRef, useState } from 'react';
-import { TantuLoom, TantuBleedCanvas, TantuAcousticToggle } from '@weaveaijs/tantu';
+import { useRef, useState } from 'react';
+import { TantuLoom } from '@weaveaijs/tantu';
 
 import { AudioEngine } from './engine/audio.js';
 import { Steering } from './engine/input.js';
 import { TRIALS_PER_LEVEL } from './engine/constants.js';
 import { FIRST_NARROWING } from './levels/first-narrowing.js';
+import {
+  loadProgress, saveProgress, completeTrial, nextTrialFor,
+  newlyRevealedDiscipline, markRevealed,
+} from './engine/progress.js';
 
+import { LoomSubstrate } from './components/LoomSubstrate.jsx';
 import { TitleScreen } from './screens/TitleScreen.jsx';
 import { CalibrationScreen } from './screens/CalibrationScreen.jsx';
 import { BriefingScreen } from './screens/BriefingScreen.jsx';
@@ -23,11 +27,13 @@ import { EndScreen } from './screens/EndScreen.jsx';
 const TOTAL_LEVELS = 100;
 const LEVELS = {};
 FIRST_NARROWING.forEach((lv) => { LEVELS[lv.id] = lv; });
+const BUILT_IDS = FIRST_NARROWING.map((lv) => lv.id).sort((a, b) => a - b);
 
 export function App() {
   const [screen, setScreen] = useState('title');
-  const [currentLevel, setCurrentLevel] = useState(1);
-  const [trial, setTrial] = useState(1);
+  const [progress, setProgress] = useState(loadProgress);
+  const [currentLevel, setCurrentLevel] = useState(progress.next.level);
+  const [trial, setTrial] = useState(progress.next.trial);
   const [gyroActive, setGyroActive] = useState(false);
   const [endInfo, setEndInfo] = useState(null);
 
@@ -39,9 +45,26 @@ export function App() {
   if (!steeringRef.current) steeringRef.current = new Steering();
 
   const level = LEVELS[currentLevel];
+  // The very first trial anyone ever plays gets onboarding scaffolding that
+  // never appears again. See first-narrowing.js's level 1.
+  const firstEver = !progress.everPlayed;
 
-  function openBriefing(id) {
+  function persist(next) {
+    setProgress(next);
+    saveProgress(next);
+    return next;
+  }
+
+  /** Open a level at the first trial not yet finished — never re-earned. */
+  function openLevel(id) {
     setCurrentLevel(id);
+    setTrial(nextTrialFor(progress, id, TRIALS_PER_LEVEL));
+    setScreen('briefing');
+  }
+
+  function resumeSession() {
+    setCurrentLevel(progress.next.level);
+    setTrial(progress.next.trial);
     setScreen('briefing');
   }
 
@@ -51,80 +74,77 @@ export function App() {
   }
 
   function completeLevel(info) {
-    setEndInfo(info);
+    let next = completeTrial(progress, currentLevel, trial, {
+      trialsPerLevel: TRIALS_PER_LEVEL,
+      builtIds: BUILT_IDS,
+    });
+
+    // A Discipline is named only once every built level that practices it is
+    // finished — five moments across the ten built levels, deterministic and
+    // never random. See docs/DESIGN.md § Progression as curriculum.
+    const discipline = newlyRevealedDiscipline(next, LEVELS, TRIALS_PER_LEVEL);
+    if (discipline) next = markRevealed(next, discipline.name);
+    persist(next);
+
+    setEndInfo({ ...info, discipline });
     setScreen('end');
   }
 
-  function retry() {
-    setScreen('briefing');
-  }
+  function retry() { setScreen('briefing'); }
 
   function continueNext() {
-    if (trial < TRIALS_PER_LEVEL) {
-      setTrial((t) => t + 1);
-    } else {
-      setTrial(1);
-      setCurrentLevel((id) => id + 1);
-    }
+    setCurrentLevel(progress.next.level);
+    setTrial(progress.next.trial);
     setScreen('briefing');
   }
 
   const hasNext = trial < TRIALS_PER_LEVEL || Boolean(LEVELS[currentLevel + 1]);
 
   return (
-    <TantuLoom viewTalimCode={`SOUNDING-${String(currentLevel).padStart(2, '0')}`} shuttle>
-      {/* The loom's own substrate — dye wicks outward from every touch,
-          resting behind everything else in the game. */}
-      <TantuBleedCanvas dye="#2b5377" trailInterval={0} maxRadius={520} saturation={0.35} />
+    <LoomSubstrate>
+      <TantuLoom viewTalimCode={`SOUNDING-${String(currentLevel).padStart(2, '0')}`} shuttle>
+        {screen === 'title' && (
+          <TitleScreen
+            levels={LEVELS}
+            totalLevels={TOTAL_LEVELS}
+            progress={progress}
+            onCalibrate={() => setScreen('calibration')}
+            onSelectLevel={openLevel}
+            onResume={resumeSession}
+          />
+        )}
 
-      <div className="snd-toolbar">
-        {/* Muted by default (Tantu's own default): SOUNDING's whole mechanic
-            is audio mixed to sit at the edge of perceptibility, and Tantu's
-            decorative loom sounds (shuttle clacks, batten strikes) are a
-            second, unrelated audio system with the opposite goal — audible
-            by design. A player who hasn't explicitly asked for them should
-            never hear them layered under gameplay audio. */}
-        <TantuAcousticToggle defaultMuted />
-      </div>
+        {screen === 'calibration' && (
+          <CalibrationScreen onDone={() => setScreen('title')} />
+        )}
 
-      {screen === 'title' && (
-        <TitleScreen
-          levels={LEVELS}
-          totalLevels={TOTAL_LEVELS}
-          onCalibrate={() => setScreen('calibration')}
-          onSelectLevel={(id) => { setTrial(1); openBriefing(id); }}
-        />
-      )}
+        {screen === 'briefing' && level && (
+          <BriefingScreen level={level} trial={trial} firstEver={firstEver} onBegin={beginLevel} />
+        )}
 
-      {screen === 'calibration' && (
-        <CalibrationScreen onDone={() => setScreen('title')} />
-      )}
+        {screen === 'game' && level && (
+          <GameScreen
+            key={`${currentLevel}-${trial}`}
+            level={level}
+            trial={trial}
+            firstEver={firstEver}
+            gyroActive={gyroActive}
+            audio={audioRef.current}
+            steering={steeringRef.current}
+            onComplete={completeLevel}
+          />
+        )}
 
-      {screen === 'briefing' && level && (
-        <BriefingScreen level={level} trial={trial} onBegin={beginLevel} />
-      )}
-
-      {screen === 'game' && level && (
-        <GameScreen
-          key={`${currentLevel}-${trial}`}
-          level={level}
-          trial={trial}
-          gyroActive={gyroActive}
-          audio={audioRef.current}
-          steering={steeringRef.current}
-          onComplete={completeLevel}
-        />
-      )}
-
-      {screen === 'end' && endInfo && (
-        <EndScreen
-          info={endInfo}
-          trial={trial}
-          hasNext={hasNext}
-          onRetry={retry}
-          onContinue={continueNext}
-        />
-      )}
-    </TantuLoom>
+        {screen === 'end' && endInfo && (
+          <EndScreen
+            info={endInfo}
+            trial={trial}
+            hasNext={hasNext}
+            onRetry={retry}
+            onContinue={continueNext}
+          />
+        )}
+      </TantuLoom>
+    </LoomSubstrate>
   );
 }

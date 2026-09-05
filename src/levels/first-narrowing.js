@@ -12,7 +12,13 @@
  *   id, name, discipline, force
  *   control: 'hold' | 'commit' | 'breathe'
  *   briefing: string (HTML permitted)
- *   init(state, audio)          — build voices, seed randomness
+ *   actionLine: string          — optional; the plain verb, shown above the
+ *                                 briefing to a Seeker who has never finished
+ *                                 a trial, then never again
+ *   init(state, audio)          — build voices, seed randomness. `state.onboarding`
+ *                                 is true only for the first trial anyone ever
+ *                                 plays; a level may use it to soften an initial
+ *                                 condition, never to change its mechanic
  *   update(state, dt, t, ctx)   — per frame; call ctx.complete() to finish
  *   onCommit(state, ctx)        — only for control: 'commit'
  *   onBreathe(state, held)      — only for control: 'breathe'
@@ -47,6 +53,20 @@ export const FIRST_NARROWING = [
                         // steepest ratio of any First Narrowing level, which
                         // real compass jitter could trip on its own)
 
+    /**
+     * The plain verb, before any atmosphere. Shown only to a Seeker who has
+     * never finished a trial — after that the prose can carry it alone.
+     */
+    actionLine: 'Turn until you can hear the draft clearly, then stay with it.',
+
+    /**
+     * Cumulative hold, as a percentage, at which the draft resolves further.
+     * The same continuous-reveal idea as level 6's depths, at a gentler scale:
+     * no new sound arrives, the one sound simply comes into focus. Deliberately
+     * fixed and stinger-free — see GameScreen's MARKS for why.
+     */
+    depthAt: [0, 45, 80],
+
     briefing:
       'You wake in <b>total darkness</b>. No fire, no torch, no wall to trust. ' +
       'Somewhere in this cave, a single draft of outside air moves — a thread of ' +
@@ -55,11 +75,26 @@ export const FIRST_NARROWING = [
       "drifts, that's alright — settle back and continue.",
 
     init(s, audio) {
-      s.sourceAngle = Math.floor(Math.random() * 360);
+      // A Seeker's very first trial starts within a turn or two of the draft,
+      // so presence begins to move while they are still learning what moving
+      // it feels like. Everything else about the level — tolerance, hold,
+      // decay — is untouched, and this never happens again.
+      if (s.onboarding) {
+        const off = (28 + Math.random() * 24) * (Math.random() < 0.5 ? -1 : 1);
+        s.sourceAngle = Math.round((off + 360) % 360);
+      } else {
+        s.sourceAngle = Math.floor(Math.random() * 360);
+      }
       s.hold = 0;
-      s.voice = audio.voice(s.sourceAngle, {
-        color: 'brown', filterType: 'bandpass', freq: 420, Q: 0.7, gain: 0,
-      });
+      s.voices = [
+        // The draft itself.
+        audio.voice(s.sourceAngle, { color: 'brown', filterType: 'bandpass', freq: 420, Q: 0.7, gain: 0 }),
+        // Its body: the weight of moving air, heard once you have settled.
+        audio.voice(s.sourceAngle, { color: 'brown', filterType: 'lowpass', freq: 180, Q: 0.6, gain: 0 }),
+        // Its edge: the fine hiss of outside, the last thing to resolve.
+        audio.voice(s.sourceAngle, { color: 'white', filterType: 'highpass', freq: 3200, Q: 0.6, gain: 0 }),
+      ];
+      s.voice = s.voices[0];
     },
 
     update(s, dt, t, ctx) {
@@ -74,6 +109,17 @@ export const FIRST_NARROWING = [
       );
       s.voice.filt.frequency.setTargetAtTime(300 + gust + align * 40, now, 0.3);
       s.voice.filt.Q.setTargetAtTime(0.6 + align * 3.2, now, 0.3);
+
+      // The two supporting layers fade in on cumulative hold, not on time, and
+      // they stay gated by alignment — drifting away loses the newest one first.
+      for (let i = 1; i < s.voices.length; i++) {
+        const open = s.hold >= this.depthAt[i];
+        const v = s.voices[i];
+        v.gain.gain.setTargetAtTime(
+          open ? (0.01 + Math.pow(align, 2.6) * (i === 1 ? 0.16 : 0.07)) * ctx.audio.audioScale : 0,
+          now, 0.6,
+        );
+      }
 
       const aligned = angleDiff(ctx.yaw, s.sourceAngle) <= this.tolerance;
       s.hold = aligned

@@ -19,13 +19,13 @@ body {
 .tantu-loom { min-height: 100vh; }
 
 .snd-toolbar {
-  /* Bottom corner, not top: the game screen's own control badge runs the
-     full width of the top edge, and a fixed top-right toolbar sat on top of
-     it, clipping its text. */
-  position: fixed;
-  bottom: var(--tantu-knot-3);
-  inset-inline-start: var(--tantu-knot-3);
-  z-index: 5;
+  /* In flow at the foot of the title screen, not floating. Two earlier
+     positions (top-right, then bottom-left) each covered something that
+     mattered — the steering readout, then the level map — because a fixed
+     control will always overlap scrollable content somewhere. */
+  margin-top: var(--tantu-knot-6);
+  display: flex;
+  justify-content: center;
 }
 
 .snd-screen {
@@ -118,6 +118,31 @@ body {
 }
 .snd-brief-text b { color: var(--tantu-accent-highlight); font-weight: 600; }
 .snd-brief-text i { color: var(--tantu-ink-secondary); }
+
+/* The plain verb, ahead of the atmosphere. First-ever trial only. */
+.snd-action-line {
+  font-family: var(--tantu-font-body);
+  font-size: 16.5px;
+  line-height: 1.6;
+  color: var(--tantu-accent-highlight);
+  border-inline-start: 2px solid var(--tantu-accent-primary);
+  padding-inline-start: var(--tantu-knot-3);
+  margin: 0 0 var(--tantu-knot-4);
+  text-align: start;
+}
+
+/* Trial voice. Never a percentage — see BriefingScreen's TRIAL_VOICE. */
+.snd-trial-note {
+  font-family: var(--tantu-font-meta);
+  font-size: 12px;
+  font-style: italic;
+  color: var(--tantu-ink-secondary);
+  margin: 0 0 var(--tantu-knot-4);
+}
+/* The card quiets as the trials deepen. Applied to the ground only, never to
+   text — dimming type would trade a mood for a contrast failure. */
+.snd-brief-card[data-trial="2"] { background-color: color-mix(in srgb, var(--tantu-bg-substrate) 45%, var(--tantu-bg-elevated)); }
+.snd-brief-card[data-trial="3"] { background-color: var(--tantu-bg-substrate); }
 
 .snd-toggle-row { display: block; max-width: 340px; margin: 0 auto var(--tantu-knot-2); }
 .snd-toggle-note {
@@ -302,6 +327,254 @@ body {
 }
 .snd-breathe-btn-holding { transform: scale(1.06); }
 
+/* --- The five Forces ------------------------------------------------
+   constants.js names a perceptual channel per Force and, until now, every
+   one of them rendered as the same orb. These are those channels.
+
+   Nothing here animates `transform` or `opacity` on .snd-orb itself: those
+   two carry the live alignment reading as inline styles, and a CSS animation
+   outranks an inline declaration in the cascade — animating them would
+   silently overwrite the feedback the whole level is built on. Motion lives
+   on the pseudo-elements and in `filter`, which are otherwise unused.
+
+   Colours bind to semantic Tantu tokens wherever one fits. Mass is the single
+   exception: no semantic token reads as "dense earth", so it takes a dye
+   primitive, which is a documented trade rather than an oversight. */
+:root {
+  --snd-force-drift: var(--tantu-accent-structural);
+  --snd-force-ignition: var(--tantu-state-caution);
+  --snd-force-flow: var(--tantu-state-success);
+  --snd-force-mass: var(--tantu-katha-bark);
+  --snd-force-void: var(--tantu-ink-secondary);
+  --snd-force: var(--tantu-accent-primary);
+}
+.snd-screen-game[data-force="drift"] { --snd-force: var(--snd-force-drift); }
+.snd-screen-game[data-force="ignition"] { --snd-force: var(--snd-force-ignition); }
+.snd-screen-game[data-force="flow"] { --snd-force: var(--snd-force-flow); }
+.snd-screen-game[data-force="mass"] { --snd-force: var(--snd-force-mass); }
+.snd-screen-game[data-force="void"] { --snd-force: var(--snd-force-void); }
+
+.snd-screen-game .snd-orb {
+  background: radial-gradient(circle at 50% 45%,
+    color-mix(in srgb, var(--snd-force) 55%, transparent),
+    color-mix(in srgb, var(--snd-force) 8%, transparent) 60%,
+    transparent 72%);
+}
+.snd-screen-game .snd-orb::after {
+  background: color-mix(in srgb, var(--snd-force) 88%, var(--tantu-ink-primary));
+  box-shadow: 0 0 18px 5px color-mix(in srgb, var(--snd-force) 45%, transparent);
+}
+
+/* `notice` outranks the Force dye, and has to say so at matching specificity:
+   it is the one moment a level marks as happening *now* (level 2's rhythm,
+   level 7's true voice), and a Force colour quietly swallowing it would take
+   away the only visual difference those levels have.
+
+   It is deliberately the zari highlight rather than the structural blue it
+   used to be: level 2 is a Drift level, Drift dyes structural blue, and a
+   notice state identical to its own ambient state signals nothing at all. */
+.snd-screen-game .snd-orb-notice {
+  background: radial-gradient(circle at 50% 45%,
+    color-mix(in srgb, var(--tantu-accent-highlight) 60%, transparent),
+    color-mix(in srgb, var(--tantu-accent-highlight) 10%, transparent) 60%,
+    transparent 72%);
+}
+.snd-screen-game .snd-orb-notice::after {
+  background: var(--tantu-accent-highlight);
+  box-shadow: 0 0 20px 6px color-mix(in srgb, var(--tantu-accent-highlight) 50%, transparent);
+}
+
+/* A shared, inert base for the per-Force pseudo-element. */
+.snd-orb::before {
+  content: '';
+  position: absolute;
+  inset: -18%;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* Drift — moving air: a wisp that never quite settles. */
+[data-force="drift"] .snd-orb::before {
+  background: radial-gradient(ellipse 60% 34% at 42% 50%,
+    color-mix(in srgb, var(--snd-force) 30%, transparent), transparent 70%);
+  animation: snd-drift 11s ease-in-out infinite;
+}
+@keyframes snd-drift {
+  0%, 100% { transform: translate3d(-6%, 2%, 0) rotate(-3deg); }
+  50%      { transform: translate3d(7%, -3%, 0) rotate(4deg); }
+}
+
+/* Ignition — thermal: the light itself is unsteady. */
+[data-force="ignition"] .snd-orb { animation: snd-flicker 2.6s steps(9, end) infinite; }
+@keyframes snd-flicker {
+  0%, 100% { filter: blur(1px) brightness(1); }
+  22%      { filter: blur(1px) brightness(1.16); }
+  38%      { filter: blur(1.4px) brightness(0.92); }
+  61%      { filter: blur(1px) brightness(1.09); }
+  79%      { filter: blur(1.2px) brightness(0.96); }
+}
+
+/* Flow — pressure: one slow swell, in and out. */
+[data-force="flow"] .snd-orb::before {
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--snd-force) 22%, transparent), transparent 68%);
+  animation: snd-undulate 7.5s ease-in-out infinite;
+}
+@keyframes snd-undulate {
+  0%, 100% { transform: scale(0.86); }
+  50%      { transform: scale(1.12); }
+}
+
+/* Mass — density: heavier, tighter, and still. What Mass does, it does
+   through the device's own haptics (see GameScreen), not through light. */
+[data-force="mass"] .snd-orb { filter: blur(0.4px); }
+[data-force="mass"] .snd-orb::before {
+  inset: -4%;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--snd-force) 40%, transparent), transparent 58%);
+}
+
+/* Void — echo delay, made visible: rings leaving and not returning. */
+[data-force="void"] .snd-orb::before {
+  border: 1px solid color-mix(in srgb, var(--snd-force) 45%, transparent);
+  animation: snd-echo 4.4s ease-out infinite;
+}
+[data-force="void"] .snd-orb { filter: blur(1.6px); }
+@keyframes snd-echo {
+  0%   { transform: scale(0.55); opacity: 0.75; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+/* --- Depth of hold --------------------------------------------------
+   The marks a sustained hold passes (GameScreen's MARKS). Continuous, and
+   deliberately without a stinger at each one: the field simply grows more
+   present, the way level 6's depths reveal by fading in rather than firing. */
+.snd-voidfield[data-depth="1"] .snd-breath-word { opacity: 0.72; }
+.snd-voidfield[data-depth="2"] .snd-breath-word { opacity: 0.84; letter-spacing: 0.18em; }
+.snd-voidfield[data-depth="3"] .snd-breath-word { opacity: 0.94; letter-spacing: 0.2em; }
+.snd-voidfield[data-depth="4"] .snd-breath-word { opacity: 1; letter-spacing: 0.22em; }
+.snd-voidfield[data-depth] .snd-presence-wrap { transition: filter 1.2s ease; }
+.snd-voidfield[data-depth="2"] .snd-presence-wrap { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--snd-force) 30%, transparent)); }
+.snd-voidfield[data-depth="3"] .snd-presence-wrap { filter: drop-shadow(0 0 7px color-mix(in srgb, var(--snd-force) 42%, transparent)); }
+.snd-voidfield[data-depth="4"] .snd-presence-wrap { filter: drop-shadow(0 0 11px color-mix(in srgb, var(--snd-force) 55%, transparent)); }
+
+/* --- The completion beat -------------------------------------------- */
+.snd-beat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  --tantu-accent-primary: var(--snd-force);
+}
+
+/* --- The Discipline reveal ------------------------------------------ */
+.snd-reveal { width: 100%; max-width: 480px; margin-bottom: var(--tantu-knot-4); }
+.snd-reveal-face {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tantu-knot-2);
+  padding: var(--tantu-knot-4) var(--tantu-knot-2);
+  text-align: center;
+}
+/* Every face here inherits its ink rather than naming one.
+   The card has two grounds — the obverse sits on this app's dark substrate,
+   the reverse on the saturated fill Tantu paints as it wicks the reveal open —
+   and Tantu has already contrast-tested the ink it pairs with each. Hard-coding
+   SOUNDING's own dark-ground colours here put gold type on the reverse's blue
+   at roughly 2.5:1. So the faces differ by size, spacing and family only, and
+   never by colour. */
+.snd-reveal-eyebrow {
+  font-family: var(--tantu-font-meta);
+  font-size: 10.5px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: inherit;
+}
+.snd-reveal-lede {
+  font-family: var(--tantu-font-body);
+  font-size: 14px;
+  line-height: 1.8;
+  color: inherit;
+  margin: 0;
+}
+.snd-reveal-name {
+  font-family: var(--tantu-font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: inherit;
+  margin: 0;
+}
+.snd-reveal-op {
+  font-family: var(--tantu-font-body);
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: inherit;
+  margin: 0;
+}
+
+/* --- The arc of the four Narrowings --------------------------------- */
+.snd-arc-card { width: 100%; max-width: 480px; margin-top: var(--tantu-knot-4); }
+.snd-arc-track {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+}
+.snd-arc-band {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--tantu-knot-2) var(--tantu-knot-1);
+  background: var(--tantu-bg-substrate);
+  border-top: 2px solid var(--tantu-grid-thread);
+  text-align: start;
+}
+.snd-arc-band[data-here] {
+  background: var(--tantu-bg-surface-active);
+  border-top-color: var(--tantu-accent-primary);
+}
+/* Where the game can be lost, the band says so without shouting. */
+.snd-arc-band[data-fails] { border-top-style: dashed; }
+.snd-arc-ordinal {
+  font-family: var(--tantu-font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--tantu-ink-secondary);
+}
+.snd-arc-band[data-here] .snd-arc-ordinal { color: var(--tantu-accent-highlight); }
+.snd-arc-span {
+  font-family: var(--tantu-font-mono);
+  font-size: 9.5px;
+  color: var(--tantu-ink-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snd-arc-note {
+  font-family: var(--tantu-font-body);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--tantu-ink-secondary);
+  margin: var(--tantu-knot-2) 0 0;
+  text-align: start;
+}
+.snd-arc-note b {
+  font-family: var(--tantu-font-mono);
+  color: var(--tantu-ink-primary);
+  font-weight: 500;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .snd-orb, .snd-breathe-btn { transition: none !important; }
+  /* The Force signatures are ambient, not informational — every one of them
+     has a still resting state that reads the same. The alignment reading
+     itself is carried by the inline scale/opacity, which never animates, so
+     nothing is lost here. */
+  .snd-orb, .snd-orb::before { animation: none !important; }
+  [data-force="void"] .snd-orb::before { opacity: 0.4; transform: scale(1.2); }
+  [data-force="flow"] .snd-orb::before { transform: scale(1); }
+  [data-force="drift"] .snd-orb::before { transform: none; }
 }

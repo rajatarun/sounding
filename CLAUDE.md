@@ -49,7 +49,30 @@ means the moment passes and you keep listening.
 **Trial 2 and 3 are much harder to hear.** Each level runs three trials at
 decreasing audio clarity (`TRIAL_AUDIO_SCALE`). There is no pass threshold —
 completing a trial always advances. Fainter is framed as "a deeper kind of
-listening," not as a difficulty tier.
+listening," not as a difficulty tier. **Never print the clarity figure.** An
+earlier build showed "~72% as clear" on the briefing screen, which is a
+difficulty readout and exactly what that framing rule forbids; the language
+lives in `BriefingScreen`'s `TRIAL_VOICE` now, and it stays qualitative.
+
+**Presence marks (25/50/75/100%) answer with a dye front, never a chime.**
+`GameScreen`'s `MARKS` are fixed and deterministic on purpose. A *predictable*
+tick is a progress bar with marks on it; an *unpredictable* one is the reward
+schedule pillar 3 refuses. Don't add a stinger, a sound, or randomness to
+them, and don't make the reward vary — the point is legibility, not surprise.
+
+**Level 1 is easier the very first time anyone plays it.** `state.onboarding`
+is true only for the first trial a Seeker ever starts, and level 1 uses it to
+seed the draft 28–52° away instead of anywhere in the circle. It changes an
+initial condition, never a mechanic — tolerance, hold and decay are identical
+— and it never happens again. Same for the `actionLine` above the briefing.
+Don't extend either into a general difficulty assist; a hint that returns in
+level 12 is a different thing entirely and undercuts the trained-ear premise.
+
+**Progress is stored, but almost nothing about it is.** `src/engine/progress.js`
+persists which trials are done, where to resume, and which Disciplines have
+been revealed. It deliberately stores no times, no scores, and no dates, so
+there is nothing for a future feature to build a streak out of — coming back
+after a year and coming back after a day read identically.
 
 ---
 
@@ -133,19 +156,45 @@ it was adopted anyway, as-is, rather than forked or renamed — so:
 ## Layout
 
 ```
-index.html                      Vite entry (mounts src/main.jsx)
-src/main.jsx                    imports Tantu's styles/fonts, renders <App/>
-src/App.jsx                     screen state machine, engine instances
+index.html                       Vite entry (mounts src/main.jsx)
+src/main.jsx                     imports Tantu's styles/fonts, renders <App/>
+src/App.jsx                      screen state machine, engine instances
 src/screens/*.jsx                title / calibration / briefing / game / end
-src/styles/game.css             bespoke chrome, built from Tantu's tokens
-src/engine/audio.js             HRTF spatialization, runtime synthesis
-src/engine/input.js             compass/gyro steering, swipe fallback
-src/engine/constants.js         tuning values + world vocabulary
-src/levels/first-narrowing.js   levels 1–10 (built)
-docs/DESIGN.md                  design pillars, the reasoning behind them
-docs/ROADMAP.md                 phases, native wrapper path, open questions
-docs/LEVELS.md                  the 100-level blueprint
+src/components/LoomSubstrate.jsx the dye canvas + pulse() for the game to use
+src/styles/game.css              bespoke chrome, built from Tantu's tokens
+src/engine/audio.js              HRTF spatialization, runtime synthesis
+src/engine/input.js              compass/gyro steering, swipe fallback
+src/engine/progress.js           resume point, trials done, Disciplines named
+src/engine/constants.js          tuning values + world vocabulary
+src/levels/first-narrowing.js    levels 1–10 (built)
+docs/DESIGN.md                   design pillars, the reasoning behind them
+docs/ROADMAP.md                  phases, native wrapper path, open questions
+docs/LEVELS.md                   the 100-level blueprint
 ```
+
+### Two beats, deliberately different sizes
+
+A trial ending and a Discipline being earned are not the same event, and they
+must not look like it — collapse them together and the frequent one gets too
+grand for pillar 3's register while the rare one stops registering as rare.
+
+| Beat | When | What |
+|---|---|---|
+| Completion | every trial | `SikkuKolamLoader` snapping taut, dyed by the level's Force (`GameScreen`) |
+| Discipline reveal | 5× in levels 1–10 | `ChambaRumalCard`'s dye-flip, turned over by the player (`EndScreen`) |
+
+A Discipline is named only once *every* built level practising it is finished
+(`newlyRevealedDiscipline`) — deterministic, never random.
+
+### The five Forces have five different signatures
+
+`constants.js` always promised a perceptual channel per Force; `game.css`'s
+`[data-force]` block is where they finally live — a drifting wisp, a flicker,
+a swell, device haptics for Mass, echo rings for Void. One rule when editing
+them: **never animate `transform` or `opacity` on `.snd-orb`.** Those two
+carry the live alignment reading as inline styles, and a CSS animation
+outranks an inline declaration — animating them silently overwrites the
+feedback the level is built on. Motion goes on the pseudo-elements.
 
 ## Adding a level
 
