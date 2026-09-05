@@ -1,5 +1,5 @@
 /**
- * first-narrowing.js — Levels 1–5.
+ * first-narrowing.js — Levels 1–10.
  *
  * THE FIRST NARROWING CONTRACT:
  * No timers. No depleting resources. No fail states. A level ends when the
@@ -18,10 +18,17 @@
  *   onBreathe(state, held)      — only for control: 'breathe'
  *   cleanup(state)              — stop any oscillators started in init
  *   completionText(state)       — { text, sub }
+ *
+ * Levels 6-10 pick up the narrative directly after level 5's ember: the tribe
+ * has fire now, and these are its first uses (warmth, water, distance-
+ * signaling, smelting, defense). Between them they touch Frame and Plumb —
+ * the two Disciplines levels 1-5 didn't reach — so by level 10 all five have
+ * been exercised mechanically, per DESIGN.md pillars 1 and 5, without the
+ * game ever naming one.
  */
 
 import { angleDiff, alignment } from '../engine/input.js';
-import { DISCIPLINES, FORCES } from '../engine/constants.js';
+import { DISCIPLINES, FORCES, DEPTHS } from '../engine/constants.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -34,7 +41,11 @@ export const FIRST_NARROWING = [
     control: 'hold',
     tolerance: 14,     // degrees counted as "aligned"
     holdSeconds: 24,   // sustained presence required
-    decaySeconds: 10,  // gentle, not punishing
+    decaySeconds: 16,  // gentle, not punishing — this is the player's first
+                        // level; it should be the most forgiving one, not the
+                        // harshest (a 10s decay against a 24s hold made it the
+                        // steepest ratio of any First Narrowing level, which
+                        // real compass jitter could trip on its own)
 
     briefing:
       'You wake in <b>total darkness</b>. No fire, no torch, no wall to trust. ' +
@@ -89,7 +100,10 @@ export const FIRST_NARROWING = [
     force: FORCES.DRIFT,
     control: 'commit',
     commitLabel: 'I notice this',
-    tolerance: 28,
+    tolerance: 20,  // tightened from 28° — wide enough to forgive normal
+                    // compass jitter, tight enough that a commit still means
+                    // the player located the rhythm, not just faced its
+                    // general half of the room
     required: 3,
 
     briefing:
@@ -177,9 +191,12 @@ export const FIRST_NARROWING = [
     discipline: DISCIPLINES.FILTER,
     force: FORCES.DRIFT,
     control: 'hold',
-    tolerance: 12,
+    tolerance: 15,     // widened from 12° — clear of typical phone-magnetometer
+                       // jitter (±5-8°), so a miss reads as attention drifting,
+                       // not sensor noise
     holdSeconds: 22,
-    decaySeconds: 10,
+    decaySeconds: 13,  // raised to keep the decay:accrual ratio roughly where
+                       // it was before the tolerance widened
 
     briefing:
       'Three passages breathe into this chamber. Two gust and wander. One ' +
@@ -381,6 +398,411 @@ export const FIRST_NARROWING = [
     completionText: () => ({
       text: 'The ember catches, flares, and holds. For the first time in this dark, you can see your own hands.',
       sub: 'The tribe has fire.',
+    }),
+  },
+
+  {
+    id: 6,
+    name: 'The Buried Warmth',
+    discipline: DISCIPLINES.PLUMB,
+    force: FORCES.MASS,
+    control: 'hold',
+    tolerance: 15,
+    holdSeconds: 35,
+    decaySeconds: 14,
+    // Cumulative hold, as a percentage, at which each successive depth
+    // (DEPTHS: Shell, Current, Weather, Lattice, Core) reveals itself.
+    depthAt: [0, 20, 45, 70, 90],
+
+    briefing:
+      'Cold has soaked through the ground itself. Somewhere below this frozen ' +
+      'clearing, warmth is rising — not from a fire, but from the rock. Turn ' +
+      'until you find it.<br><br>What you hear first is only the surface: a ' +
+      'thin, cold hiss. Stay with it, unhurried, and something under that hiss ' +
+      'will begin to show itself — then something under <b>that</b>. There is ' +
+      'no single moment of arrival here. Keep listening past what first seems ' +
+      'like an answer.',
+
+    init(s, audio) {
+      s.ventAngle = Math.floor(Math.random() * 360);
+      s.hold = 0;
+      // One voice per depth, all at the same bearing — deeper layers sit
+      // lower in frequency and rougher in texture.
+      const layers = [
+        { color: 'white', filterType: 'highpass', freq: 2600, Q: 0.6 },
+        { color: 'brown', filterType: 'bandpass', freq: 700, Q: 1 },
+        { color: 'brown', filterType: 'lowpass', freq: 260, Q: 0.8 },
+        { color: 'crackle', filterType: 'bandpass', freq: 420, Q: 2 },
+        { color: 'brown', filterType: 'lowpass', freq: 120, Q: 0.6 },
+      ];
+      s.voices = layers.map((l) => audio.voice(s.ventAngle, { ...l, gain: 0 }));
+    },
+
+    update(s, dt, t, ctx) {
+      const align = alignment(ctx.yaw, s.ventAngle);
+      const now = ctx.audio.ctx.currentTime;
+      const aligned = angleDiff(ctx.yaw, s.ventAngle) <= this.tolerance;
+
+      s.hold = aligned
+        ? Math.min(100, s.hold + (100 / this.holdSeconds) * dt)
+        : Math.max(0, s.hold - (100 / this.decaySeconds) * dt);
+
+      s.voices.forEach((v, i) => {
+        const unlocked = s.hold >= this.depthAt[i];
+        const target = unlocked ? (0.015 + Math.pow(align, 2.6) * 0.4) * ctx.audio.audioScale : 0;
+        v.gain.gain.setTargetAtTime(target, now, i === 0 ? 0.25 : 0.6);
+      });
+
+      const depthIdx = this.depthAt.filter((th) => s.hold >= th).length - 1;
+      const words = [
+        'cold surface',
+        'something moves beneath',
+        'a slow pulse, deeper',
+        'the rock itself hums',
+        'warmth, at the root of it',
+      ];
+
+      ctx.setPresence(s.hold);
+      ctx.setOrb(align);
+      ctx.setWord(aligned ? words[Math.max(0, depthIdx)] : 'listening');
+
+      if (s.hold >= 100) ctx.complete();
+    },
+
+    completionText: () => ({
+      text: `Heat rises through your palms, up from the rock itself, real and unmistakable — you had to go past ${DEPTHS.length - 1} false floors to find it.`,
+      sub: 'The vent is found.',
+    }),
+  },
+
+  {
+    id: 7,
+    name: "The River's Two Voices",
+    discipline: DISCIPLINES.FRAME,
+    force: FORCES.FLOW,
+    control: 'commit',
+    commitLabel: 'This is the crossing',
+    tolerance: 20,      // phase 1: finding the simple, regular tick
+    trueTolerance: 14,  // phase 2: finding the true, irregular groan
+
+    briefing:
+      'The river has frozen over, but it hasn’t gone silent. A steady ' +
+      'tick-tick-tick creaks somewhere in the ice — easy to find, easy to ' +
+      'trust. Turn toward it and mark it.<br><br>That’s a start, not an ' +
+      'answer. Once you’ve marked it, listen further — the ice has a ' +
+      'second voice, slower and less regular, that the first one was ' +
+      'covering. When you hear it, let the first go, and mark <b>that</b> ' +
+      'instead.',
+
+    init(s) {
+      s.simpleAngle = Math.floor(Math.random() * 360);
+      do {
+        s.trueAngle = Math.floor(Math.random() * 360);
+      } while (angleDiff(s.simpleAngle, s.trueAngle) < 90);
+      s.framed = false;
+      s.nextTick = 0.6;
+      s.revealElapsed = 0;
+      s.nextGroanAt = null;
+    },
+
+    update(s, dt, t, ctx) {
+      const alignSimple = alignment(ctx.yaw, s.simpleAngle);
+      const alignTrue = alignment(ctx.yaw, s.trueAngle);
+
+      if (!s.framed) {
+        if (t >= s.nextTick) {
+          ctx.audio.burst({
+            angleDeg: s.simpleAngle, color: 'crackle', filterType: 'highpass',
+            freq: 1800, Q: 1, dur: 0.16, attack: 0.005,
+            gain: 0.05 + Math.pow(alignSimple, 2.6) * 0.4,
+          });
+          s.nextTick = t + 1.4;
+        }
+        ctx.setPresence(0);
+        ctx.setOrb(alignSimple, false);
+        ctx.setWord(angleDiff(ctx.yaw, s.simpleAngle) <= this.tolerance ? 'a shape, steady' : 'ticking, somewhere');
+        return;
+      }
+
+      // Phase 2: the simple tick fades out over ten seconds while the true,
+      // irregular groan takes over — inverting the "regular = real" instinct
+      // levels 2 and 3 just trained. Discarding that instinct is the point.
+      s.revealElapsed += dt;
+      if (s.revealElapsed < 10 && t >= s.nextTick) {
+        const fade = Math.max(0, 1 - s.revealElapsed / 10);
+        ctx.audio.burst({
+          angleDeg: s.simpleAngle, color: 'crackle', filterType: 'highpass',
+          freq: 1800, dur: 0.16, attack: 0.005,
+          gain: (0.05 + Math.pow(alignSimple, 2.6) * 0.4) * fade,
+        });
+        s.nextTick = t + 1.4;
+      }
+      if (s.nextGroanAt == null) s.nextGroanAt = t + 1 + Math.random();
+      if (t >= s.nextGroanAt) {
+        ctx.audio.burst({
+          angleDeg: s.trueAngle, color: 'brown', filterType: 'lowpass',
+          freq: 200 - Math.random() * 60, Q: 0.6, dur: 1.1, attack: 0.05,
+          gain: 0.05 + Math.pow(alignTrue, 2.6) * 0.5,
+        });
+        s.nextGroanAt = t + 3 + Math.random() * 2;
+      }
+
+      ctx.setPresence(60);
+      ctx.setOrb(alignTrue, true);
+      ctx.setWord(angleDiff(ctx.yaw, s.trueAngle) <= this.trueTolerance ? 'the true voice' : 'listen further');
+    },
+
+    onCommit(s, ctx) {
+      if (!s.framed) {
+        if (angleDiff(ctx.yaw, s.simpleAngle) <= this.tolerance) {
+          s.framed = true;
+          s.revealElapsed = 0;
+          s.nextGroanAt = null;
+          ctx.flash('a shape, at least');
+        } else {
+          ctx.flash('nothing there yet');
+        }
+        return;
+      }
+      if (angleDiff(ctx.yaw, s.trueAngle) <= this.trueTolerance) {
+        ctx.complete();
+      } else if (angleDiff(ctx.yaw, s.simpleAngle) <= this.tolerance) {
+        ctx.flash('only the shape you already knew');
+      } else {
+        ctx.flash('close — the true voice is slower');
+      }
+    },
+
+    completionText: () => ({
+      text: 'The ice groans low and slow, nothing like the ticking that first caught your ear. You mark the true crossing, and the tribe passes over safely.',
+      sub: "The river's real voice found.",
+    }),
+  },
+
+  {
+    id: 8,
+    name: 'Between Two Cliffs',
+    discipline: DISCIPLINES.FILTER,
+    force: FORCES.VOID,
+    control: 'hold',
+    tolerance: 13,
+    holdSeconds: 30,
+    decaySeconds: 12,
+
+    briefing:
+      'Across this valley, someone answers when you call — but a call thrown ' +
+      'against two cliff faces comes back to you many times, thick with its ' +
+      'own echo, before the true answer ever arrives.<br><br>The echoes are ' +
+      'loud and close. The true answer is quieter, and comes late. Learn to ' +
+      'want the quiet one.',
+
+    init(s, audio) {
+      s.trueAngle = Math.floor(Math.random() * 360);
+      s.hold = 0;
+      s.nextCallAt = 2;
+      s.pendingTrueAt = null;
+      s.voice = audio.voice(s.trueAngle, {
+        color: 'brown', filterType: 'bandpass', freq: 500, Q: 0.7, gain: 0,
+      });
+    },
+
+    update(s, dt, t, ctx) {
+      const align = alignment(ctx.yaw, s.trueAngle);
+      const now = ctx.audio.ctx.currentTime;
+
+      s.voice.gain.gain.setTargetAtTime(
+        (0.015 + Math.pow(align, 2.6) * 0.3) * ctx.audio.audioScale, now, 0.25,
+      );
+
+      if (t >= s.nextCallAt) {
+        const decoys = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < decoys; i++) {
+          ctx.audio.burst({
+            angleDeg: Math.floor(Math.random() * 360), color: 'crackle',
+            filterType: 'lowpass', freq: 500 + Math.random() * 300, Q: 2.5,
+            dur: 0.5 + Math.random() * 0.3, gain: 0.3, attack: 0.02,
+          });
+        }
+        s.pendingTrueAt = t + 1.2;
+        s.nextCallAt = t + 5 + Math.random() * 2;
+      }
+      if (s.pendingTrueAt != null && t >= s.pendingTrueAt) {
+        ctx.audio.burst({
+          angleDeg: s.trueAngle, color: 'white', filterType: 'bandpass',
+          freq: 900, Q: 1.2, dur: 0.32, gain: 0.16, attack: 0.01,
+        });
+        s.pendingTrueAt = null;
+      }
+
+      const aligned = angleDiff(ctx.yaw, s.trueAngle) <= this.tolerance;
+      s.hold = aligned
+        ? Math.min(100, s.hold + (100 / this.holdSeconds) * dt)
+        : Math.max(0, s.hold - (100 / this.decaySeconds) * dt);
+
+      ctx.setPresence(s.hold);
+      ctx.setOrb(align);
+      ctx.setWord(aligned ? 'clean, close' : align > 0.5 ? 'nearly' : 'echo, not it');
+
+      if (s.hold >= 100) ctx.complete();
+    },
+
+    completionText: () => ({
+      text: 'Under the din of your own voice thrown back at you, one answer comes through clean and small and real. Someone is there.',
+      sub: 'The true call found.',
+    }),
+  },
+
+  {
+    id: 9,
+    name: 'The Bellows and the Flame',
+    discipline: DISCIPLINES.BALANCE,
+    force: FORCES.IGNITION,
+    control: 'breathe',
+    holdSeconds: 40,   // cumulative time within the healthy band
+    decaySeconds: 16,
+
+    briefing:
+      'Ore won’t go liquid on its own. The bellows need breath — but a ' +
+      'flame this hungry punishes both a stinting hand and a greedy one.' +
+      '<br><br>There is no rhythm to copy here, no beat to match. Hold when ' +
+      'it needs air, release when it’s had enough, and mind that what ' +
+      'you bank now, you may pay for later.',
+
+    init(s, audio) {
+      s.temp = 20;
+      s.held = false;
+      s.progress = 0;
+      s.overheatTimer = 0;
+
+      const c = audio.ctx;
+      const noise = c.createBufferSource(); noise.buffer = audio.buffers.brown; noise.loop = true;
+      const filt = c.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = 300; filt.Q.value = 0.8;
+      const gain = c.createGain(); gain.gain.value = 0.08;
+      noise.connect(filt); filt.connect(gain); gain.connect(audio.bus);
+      noise.start();
+      s.nodes = { noise, filt, gain };
+    },
+
+    update(s, dt, t, ctx) {
+      const now = ctx.audio.ctx.currentTime;
+
+      s.temp = clamp(s.temp + (s.held ? 22 * dt : -12 * dt), 0, 100);
+
+      // Hoarding heat costs heat — Balance made literal, not just named.
+      if (s.temp > 80) {
+        s.overheatTimer += dt;
+        if (s.overheatTimer > 1.2) {
+          s.temp = Math.max(55, s.temp - 30);
+          ctx.audio.burst({
+            angleDeg: 0, distance: 1, color: 'crackle', filterType: 'highpass',
+            freq: 2000, dur: 0.4, gain: 0.4, attack: 0.01,
+          });
+          s.overheatTimer = 0;
+        }
+      } else {
+        s.overheatTimer = 0;
+      }
+
+      const inBand = s.temp >= 60 && s.temp <= 85;
+      s.progress = inBand
+        ? Math.min(100, s.progress + (100 / this.holdSeconds) * dt)
+        : Math.max(0, s.progress - (100 / this.decaySeconds) * dt);
+
+      s.nodes.gain.gain.setTargetAtTime((0.05 + (s.temp / 100) * 0.25) * ctx.audio.audioScale, now, 0.15);
+      s.nodes.filt.frequency.setTargetAtTime(220 + s.temp * 6, now, 0.15);
+
+      ctx.setPresence(s.progress);
+      ctx.setOrb(s.temp / 100, s.temp > 80);
+      ctx.setWord(s.temp > 80 ? 'too hot — ease back' : s.temp < 45 ? 'feed it more' : 'holding true heat');
+
+      if (s.progress >= 100) ctx.complete();
+    },
+
+    onBreathe(s, held) { s.held = held; },
+
+    cleanup(s) {
+      if (!s.nodes) return;
+      try { s.nodes.noise.stop(); } catch (e) { /* already stopped */ }
+    },
+
+    completionText: () => ({
+      text: 'The ore slumps, brightens, and runs — the first true melt the tribe has ever made.',
+      sub: 'The crucible holds.',
+    }),
+  },
+
+  {
+    id: 10,
+    name: 'The Turning Wind',
+    discipline: DISCIPLINES.TRACE,
+    force: FORCES.DRIFT,
+    control: 'hold',
+    tolerance: 18,
+    holdSeconds: 38,
+    decaySeconds: 20,
+
+    briefing:
+      'The fire is lit, and a squall has found it. The wind won’t sit ' +
+      'still long enough to name a direction and be done with it — it ' +
+      'shifts, and shifts again.<br><br>Stay with it anyway. You are not ' +
+      'finding a place to rest; you are finding it, over and over, for as ' +
+      'long as it keeps changing.',
+
+    init(s, audio) {
+      s.threatAngle = Math.floor(Math.random() * 360);
+      s.driftVel = (Math.random() * 2 - 1) * 8;
+      s.nextGustAt = 4 + Math.random() * 4;
+      s.hold = 0;
+      s.misalignedFor = 0;
+      s.lastCrackle = 0;
+      s.voice = audio.voice(s.threatAngle, {
+        color: 'brown', filterType: 'bandpass', freq: 400, Q: 0.7, gain: 0,
+      });
+    },
+
+    update(s, dt, t, ctx) {
+      // Continuous random walk, with occasional larger gusts — the target
+      // never settles, so tracking it never gets to stop either.
+      s.driftVel = Math.max(-25, Math.min(25, s.driftVel + (Math.random() * 2 - 1) * 6 * dt));
+      s.threatAngle = (s.threatAngle + s.driftVel * dt + 360) % 360;
+      if (t >= s.nextGustAt) {
+        s.threatAngle = (s.threatAngle + (Math.random() * 2 - 1) * 70 + 360) % 360;
+        s.nextGustAt = t + 5 + Math.random() * 6;
+      }
+
+      const align = alignment(ctx.yaw, s.threatAngle);
+      const now = ctx.audio.ctx.currentTime;
+      const gust = Math.sin(t * 0.3) * 40;
+      s.voice.gain.gain.setTargetAtTime((0.02 + Math.pow(align, 2.6) * 0.5) * ctx.audio.audioScale, now, 0.2);
+      s.voice.filt.frequency.setTargetAtTime(320 + gust + align * 40, now, 0.25);
+
+      const aligned = angleDiff(ctx.yaw, s.threatAngle) <= this.tolerance;
+      s.hold = aligned
+        ? Math.min(100, s.hold + (100 / this.holdSeconds) * dt)
+        : Math.max(0, s.hold - (100 / this.decaySeconds) * dt);
+      s.misalignedFor = aligned ? 0 : s.misalignedFor + dt;
+
+      // The flame itself: a fixed ember drone that dims through a long
+      // misalignment stretch — felt stakes, with no fail state attached.
+      if (t - s.lastCrackle >= 1.4) {
+        const dim = Math.max(0, 1 - s.misalignedFor / 6);
+        ctx.audio.burst({
+          angleDeg: 0, distance: 1, color: 'crackle', filterType: 'highpass',
+          freq: 1400, dur: 0.3, gain: 0.05 + 0.2 * dim, attack: 0.01,
+        });
+        s.lastCrackle = t;
+      }
+
+      ctx.setPresence(s.hold);
+      ctx.setOrb(align);
+      ctx.setWord(aligned ? 'here, again' : align > 0.5 ? 'it moved' : 'tracking');
+
+      if (s.hold >= 100) ctx.complete();
+    },
+
+    completionText: () => ({
+      text: "The wind circles, doubles back, tries the other side — and every time, you're already there. It gives up before the flame does.",
+      sub: "The fire endures its first storm.",
     }),
   },
 ];

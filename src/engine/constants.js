@@ -14,7 +14,7 @@ export const TRIALS_PER_LEVEL = 3;
  * quieter, framed to the player as "a deeper kind of listening" rather than
  * a difficulty tier. There is no score gate — completing a trial advances.
  */
-export const TRIAL_AUDIO_SCALE = [1.0, 0.68, 0.42];
+export const TRIAL_AUDIO_SCALE = [1.0, 0.72, 0.50];
 
 /**
  * THE NARROWINGS — the four eras.

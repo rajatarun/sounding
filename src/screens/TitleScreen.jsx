@@ -17,6 +17,12 @@ export function TitleScreen({ levels, totalLevels, onCalibrate, onSelectLevel })
           Headphones, a silent room, and as much time as you need. Nothing here
           can be lost — only settled into.
         </p>
+        {/* Said once, here, and never again: names the frame in plain
+            English rather than letting the two vocabularies (SOUNDING's
+            invented one, the loom underneath the screen) blend into each
+            other by default. See CLAUDE.md's design-system integration
+            note for why this line exists and why it doesn't repeat. */}
+        <p className="snd-subtitle snd-frame-note">What you see is woven. What matters, you'll hear.</p>
         <TantuButton variant="secondary" onClick={onCalibrate}>Calibrate Your Ears</TantuButton>
       </CapillaryBleedSurface>
 

@@ -78,7 +78,13 @@ export function App() {
       <TantuBleedCanvas dye="#2b5377" trailInterval={0} maxRadius={520} saturation={0.35} />
 
       <div className="snd-toolbar">
-        <TantuAcousticToggle defaultMuted={false} />
+        {/* Muted by default (Tantu's own default): SOUNDING's whole mechanic
+            is audio mixed to sit at the edge of perceptibility, and Tantu's
+            decorative loom sounds (shuttle clacks, batten strikes) are a
+            second, unrelated audio system with the opposite goal — audible
+            by design. A player who hasn't explicitly asked for them should
+            never hear them layered under gameplay audio. */}
+        <TantuAcousticToggle defaultMuted />
       </div>
 
       {screen === 'title' && (
