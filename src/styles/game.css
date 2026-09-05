@@ -1,0 +1,281 @@
+/**
+ * game.css — SOUNDING-specific chrome layered on top of Tantu.
+ *
+ * The visualization here (the orb, the breath word, the void-field) has no
+ * Tantu component of its own — it's bespoke to the game — but it is built
+ * entirely from Tantu's semantic tokens so it re-dyes with the rest of the
+ * system rather than drifting from it.
+ */
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--tantu-bg-substrate);
+  overflow: hidden;
+  touch-action: none;
+}
+* { -webkit-tap-highlight-color: transparent; user-select: none; }
+
+.tantu-loom { min-height: 100vh; }
+
+.snd-toolbar {
+  position: fixed;
+  top: var(--tantu-knot-3);
+  inset-inline-end: var(--tantu-knot-3);
+  z-index: 5;
+}
+
+.snd-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: calc(100vh - var(--tantu-knot-12));
+  padding: var(--tantu-knot-6) var(--tantu-knot-3);
+  text-align: center;
+}
+.snd-screen-centered { justify-content: center; }
+
+/* --- Title ------------------------------------------------------- */
+
+.snd-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--tantu-knot-8) var(--tantu-knot-4);
+  width: 100%;
+  max-width: 480px;
+}
+.snd-eyebrow {
+  font-family: var(--tantu-font-meta);
+  font-size: 11px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--tantu-ink-secondary);
+  margin-bottom: var(--tantu-knot-3);
+}
+.snd-act {
+  font-family: var(--tantu-font-meta);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--tantu-accent-highlight);
+  margin-bottom: 2px;
+}
+.snd-title {
+  font-family: var(--tantu-font-display);
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--tantu-ink-primary);
+  margin: 0 0 2px 0;
+}
+.snd-tagline {
+  font-family: var(--tantu-font-display);
+  font-size: 15px;
+  letter-spacing: 0.2em;
+  color: var(--tantu-ink-secondary);
+  margin-bottom: var(--tantu-knot-3);
+}
+.snd-subtitle {
+  font-family: var(--tantu-font-body);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--tantu-ink-secondary);
+  max-width: 320px;
+  margin: 0 0 var(--tantu-knot-4) 0;
+}
+
+.snd-levelmap-card { width: 100%; max-width: 480px; margin-top: var(--tantu-knot-4); }
+.snd-levelmap-card .tantu-table { max-height: 40vh; overflow-y: auto; display: block; }
+
+/* --- Briefing / calibration / end ---------------------------------- */
+
+.snd-brief-label {
+  font-family: var(--tantu-font-meta);
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--tantu-accent-structural);
+  margin-bottom: var(--tantu-knot-4);
+}
+.snd-brief-text {
+  font-family: var(--tantu-font-body);
+  font-size: 15px;
+  line-height: 1.9;
+  color: var(--tantu-ink-primary);
+  margin: 0 0 var(--tantu-knot-4) 0;
+}
+.snd-brief-text b { color: var(--tantu-accent-highlight); font-weight: 600; }
+.snd-brief-text i { color: var(--tantu-ink-secondary); }
+
+.snd-toggle-row { display: block; max-width: 340px; margin: 0 auto var(--tantu-knot-2); }
+.snd-toggle-note {
+  font-family: var(--tantu-font-meta);
+  font-size: 10.5px;
+  color: var(--tantu-ink-secondary);
+  margin-top: var(--tantu-knot-1);
+}
+
+.snd-btnrow { display: flex; gap: var(--tantu-knot-3); flex-wrap: wrap; justify-content: center; margin-top: var(--tantu-knot-3); }
+
+.snd-end-glyph {
+  font-family: var(--tantu-font-meta);
+  font-size: 13px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--tantu-accent-structural);
+  margin-bottom: var(--tantu-knot-4);
+}
+.snd-end-text {
+  font-family: var(--tantu-font-body);
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--tantu-ink-primary);
+  max-width: 360px;
+  margin: 0 auto var(--tantu-knot-2);
+}
+.snd-end-sub {
+  font-family: var(--tantu-font-meta);
+  font-size: 12px;
+  color: var(--tantu-ink-secondary);
+  margin: 0 0 var(--tantu-knot-6);
+}
+
+/* --- The game screen ------------------------------------------------ */
+
+.snd-screen-game { padding: 0; min-height: 100vh; position: relative; }
+
+.snd-control-badge {
+  position: absolute;
+  top: var(--tantu-knot-6);
+  inset-inline: 0;
+  text-align: center;
+  font-family: var(--tantu-font-meta);
+  font-size: 9px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--tantu-ink-secondary);
+  z-index: 2;
+}
+
+.snd-voidfield {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.snd-drag-hint {
+  position: absolute;
+  top: 50%;
+  inset-inline: 0;
+  text-align: center;
+  font-family: var(--tantu-font-meta);
+  font-size: 11px;
+  color: var(--tantu-ink-secondary);
+  opacity: 0.4;
+  letter-spacing: 0.1em;
+}
+
+.snd-breath-word {
+  position: absolute;
+  top: 44%;
+  inset-inline: 0;
+  text-align: center;
+  font-family: var(--tantu-font-display);
+  font-size: 16px;
+  letter-spacing: 0.15em;
+  color: var(--tantu-ink-secondary);
+  opacity: 0.6;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.snd-orb {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%,
+    color-mix(in srgb, var(--tantu-accent-primary) 55%, transparent),
+    color-mix(in srgb, var(--tantu-accent-primary) 8%, transparent) 60%,
+    transparent 72%);
+  filter: blur(1px);
+  position: relative;
+  transition: transform 0.8s var(--tantu-motion-capillary, ease), opacity 0.8s ease, background 0.8s ease;
+}
+.snd-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--tantu-accent-highlight);
+  box-shadow: 0 0 18px 5px color-mix(in srgb, var(--tantu-accent-highlight) 45%, transparent);
+}
+.snd-orb-notice {
+  background: radial-gradient(circle at 50% 45%,
+    color-mix(in srgb, var(--tantu-accent-structural) 55%, transparent),
+    color-mix(in srgb, var(--tantu-accent-structural) 8%, transparent) 60%,
+    transparent 72%);
+}
+.snd-orb-notice::after {
+  background: var(--tantu-accent-structural);
+  box-shadow: 0 0 18px 5px color-mix(in srgb, var(--tantu-accent-structural) 45%, transparent);
+}
+
+.snd-presence-wrap {
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 180px;
+  z-index: 2;
+}
+
+.snd-heading-cue {
+  position: absolute;
+  bottom: 120px;
+  inset-inline: 0;
+  text-align: center;
+  font-family: var(--tantu-font-meta);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--tantu-ink-secondary);
+  z-index: 2;
+  opacity: 0.7;
+}
+
+.snd-controls-row {
+  position: absolute;
+  bottom: var(--tantu-knot-8);
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tantu-knot-4);
+  z-index: 2;
+}
+
+/* Square, not circular — Tantu's woven surfaces don't take curves (see the
+   design system's own "curves forbidden on woven structures" reset). */
+.snd-turn-btn {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.snd-breathe-btn {
+  width: 130px;
+  height: 130px;
+  transition: transform 0.3s ease;
+}
+.snd-breathe-btn-holding { transform: scale(1.06); }
+
+@media (prefers-reduced-motion: reduce) {
+  .snd-orb, .snd-breathe-btn { transition: none !important; }
+}
