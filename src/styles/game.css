@@ -104,8 +104,15 @@ body {
   margin-top: calc(var(--tantu-knot-4) * -1);
 }
 
-.snd-levelmap-card { width: 100%; max-width: 480px; margin-top: var(--tantu-knot-4); }
-.snd-levelmap-card .tantu-table { max-height: 40vh; overflow-y: auto; display: block; }
+.snd-naksha-card { width: 100%; max-width: 480px; margin-top: var(--tantu-knot-4); }
+.snd-naksha-note {
+  font-family: var(--tantu-font-body);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--tantu-ink-secondary);
+  margin: var(--tantu-knot-3) 0 0;
+  text-align: start;
+}
 
 /* --- Briefing / calibration / end ---------------------------------- */
 
@@ -522,60 +529,6 @@ body {
   line-height: 1.75;
   color: inherit;
   margin: 0;
-}
-
-/* --- The arc of the four Narrowings --------------------------------- */
-.snd-arc-card { width: 100%; max-width: 480px; margin-top: var(--tantu-knot-4); }
-.snd-arc-track {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  width: 100%;
-}
-.snd-arc-band {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  padding: var(--tantu-knot-2) var(--tantu-knot-1);
-  background: var(--tantu-bg-substrate);
-  border-top: 2px solid var(--tantu-grid-thread);
-  text-align: start;
-}
-.snd-arc-band[data-here] {
-  background: var(--tantu-bg-surface-active);
-  border-top-color: var(--tantu-accent-primary);
-}
-/* Where the game can be lost, the band says so without shouting. */
-.snd-arc-band[data-fails] { border-top-style: dashed; }
-.snd-arc-ordinal {
-  font-family: var(--tantu-font-mono);
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  color: var(--tantu-ink-secondary);
-}
-.snd-arc-band[data-here] .snd-arc-ordinal { color: var(--tantu-accent-highlight); }
-.snd-arc-span {
-  font-family: var(--tantu-font-mono);
-  font-size: 9.5px;
-  color: var(--tantu-ink-secondary);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.snd-arc-note {
-  font-family: var(--tantu-font-body);
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--tantu-ink-secondary);
-  margin: var(--tantu-knot-2) 0 0;
-  text-align: start;
-}
-.snd-arc-note b {
-  font-family: var(--tantu-font-mono);
-  color: var(--tantu-ink-primary);
-  font-weight: 500;
 }
 
 @media (prefers-reduced-motion: reduce) {
