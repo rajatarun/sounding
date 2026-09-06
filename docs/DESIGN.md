@@ -98,7 +98,7 @@ The curriculum is the difficulty curve, not a layer on top of it.
 
 ## Trials
 
-Every level runs three trials at decreasing audio clarity (100% → 68% → 42%).
+Every level runs three trials at decreasing audio clarity (100% → 72% → 50%).
 There is no pass threshold; completing a trial always advances. Fainter is
 framed to the player as *a deeper kind of listening*, never as a difficulty
 tier — the language matters, because the moment it reads as "hard mode" it

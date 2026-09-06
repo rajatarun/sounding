@@ -3,8 +3,8 @@
 Four eras, compressing 4:3:2:1. Level counts shrink while intensity rises;
 session lengths run inversely, so total playtime stays roughly balanced.
 
-**Status:** Levels 1–5 are built (`src/levels/first-narrowing.js`). Everything
-below level 6 is specification, not implementation.
+**Status:** Levels 1–10 are built (`src/levels/first-narrowing.js`). Everything
+below level 11 is specification, not implementation.
 
 > **Reproportioning note.** This blueprint was originally written against an
 > even 25/25/25/25 split. The move to 40/30/20/10 means later eras shed levels
@@ -23,11 +23,11 @@ below level 6 is specification, not implementation.
 | 3 | Crossing Drafts | Three passages breathe into the chamber; two wander, one climbs. | Find the rising-pitch draft and rest attention there. **Built.** |
 | 4 | The Sound of Breath | A stone seal responds to rhythmic atmospheric pressure. | Match your breathing to the cave's slow swell and fade. **Built.** |
 | 5 | The Unlit Hearth | A dead ember waits in a blind hollow, one spark from catching. | Hold steady facing it until it takes. **Built.** |
-| 6 | Heat Gradient | Pitch-black forest; geothermal vents offer survival warmth. | Sweep for thermal signature; locate the vent core. |
-| 7 | State Change | A frozen river blocks passage; fire is scarce. | Judge the heat needed to open a path without exhausting the flame. |
-| 8 | The Smoke Signal | Communicate across a valley using wind drafts. | Time releases to align with the valley's draft vectors. |
-| 9 | The Crucible | First smelting; requires precise air-to-fuel ratio. | Adjust bellows rhythm to raise thermal output to melting point. |
-| 10 | The Sacred Spark | A mountain squall threatens the central flame. | Build barriers shaped to variable wind vectors. |
+| 6 | The Buried Warmth | Frozen ground; geothermal warmth rises from the rock in nested layers. | Hold alignment through five revealed depths (Plumb) to the source. **Built.** |
+| 7 | The River's Two Voices | A frozen river creaks with an obvious, regular tick — and a true, irregular voice underneath it. | Mark the simple rhythm, then discard it for the true one (Frame). **Built.** |
+| 8 | Between Two Cliffs | A call across a valley returns as loud, close echoes before the true, quiet answer arrives. | Hold on the true response, not the echoes (Filter). **Built.** |
+| 9 | The Bellows and the Flame | First smelting; the flame punishes both starving and flooding it with air. | Keep the bellows' heat in its band without hoarding (Balance). **Built.** |
+| 10 | The Turning Wind | A squall keeps shifting; the flame it threatens never sits still long enough to name once. | Continuously re-track the moving threat (Trace) to protect the flame. **Built.** |
 | 11 | The Parched River | Water has stopped; subterranean streams echo underground. | Listen for low-frequency liquid vibration; site the well. |
 | 12 | The Levee | Flash flood threatens riverside dwellings. | Balance flow across three relief channels. |
 | 13 | Ocean Tides | Navigating a raft between islands. | Read tidal vectors and lunar cycle to cross without drifting. |

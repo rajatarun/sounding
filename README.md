@@ -16,13 +16,17 @@ clearly present only when you're not. That is the mechanic, not a bug.
 ## Play
 
 ```bash
-python3 -m http.server 8000
+npm install
+npm run dev
 ```
 
-Open `http://localhost:8000` on a phone, put on headphones, and start with
-**Calibrate Your Ears** before your first level.
+Open the printed URL on a phone (`npm run dev -- --host` to reach it from a
+phone on the same network), put on headphones, and start with **Calibrate
+Your Ears** before your first level.
 
-No build step and no dependencies — it's ES modules and the Web Audio API.
+Built with React + Vite on top of [Tantu](https://github.com/rajatarun/aiweave/tree/main/src/tantu),
+the published `@weaveaijs/tantu` design system — see CLAUDE.md's "The UI runs
+on Tantu" section for what that dependency means and its one boundary rule.
 
 ## Steer
 
@@ -48,7 +52,7 @@ Level counts compress 4:3:2:1 while session lengths run inversely — a First
 Narrowing level may be a twenty-minute sit; a Fourth Narrowing level, ninety
 seconds of precision.
 
-**Levels 1–5 are built.** The rest are specified in `docs/LEVELS.md`.
+**Levels 1–10 are built.** The rest are specified in `docs/LEVELS.md`.
 
 ## Docs
 
@@ -64,3 +68,7 @@ real classical Indian philosophical vocabulary; it was deliberately removed
 rather than risk misrepresenting a living tradition inside a commercial game.
 Contributions should keep the invented vocabulary consistent and should not
 reintroduce real religious or philosophical terminology.
+
+This rule covers SOUNDING's own content; it does not extend to Tantu, an
+external dependency with its own (real-world-derived) naming conventions.
+See CLAUDE.md for the boundary between the two and known friction points.

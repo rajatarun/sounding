@@ -1,0 +1,21 @@
+{
+  "name": "sounding",
+  "version": "0.2.0",
+  "private": true,
+  "description": "SOUNDING — an audio-first game, built on the Tantu design system.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@weaveaijs/tantu": "^0.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "vite": "^7.0.0"
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Where this is
 
-**Phase 0 — done.** Levels 1–5 playable. The HRTF engine, compass steering,
+**Phase 0 — done.** Levels 1–10 playable. The HRTF engine, compass steering,
 trial scaling, and ear calibration all work. Five genuinely distinct mechanics
 (sustained hold, signal discrimination, three-way triangulation, breath
 matching, sustained ignition) share one engine, which is the thing that needed
@@ -54,10 +54,11 @@ exercise it.
 
 ## Open questions
 
-**Is Trial 3 audible?** 42% clarity stacked on an already-wide dynamic range may
-cross from "hard" to "actually inaudible" on some headphone/device combinations.
-Needs testing across cheap earbuds, good over-ears, and AirPods before the
-scaling is trusted.
+**Is Trial 3 audible?** `TRIAL_AUDIO_SCALE` was raised to `[1.0, 0.72, 0.50]`
+(from `[1.0, 0.68, 0.42]`) after a game-theory review flagged 42% as more
+likely than not to cross from "hard" to "actually inaudible" stacked on an
+already-wide dynamic range. 50% still needs testing across cheap earbuds,
+good over-ears, and AirPods before the scaling is trusted.
 
 **Are the hold durations right?** 22–26 seconds of sustained alignment was
 chosen to feel meditative rather than reflexive. It may be too long before the
