@@ -7,6 +7,13 @@
  * system rather than drifting from it.
  */
 
+/* Without the brand layer, Tantu binds `display` to ui-serif/Georgia. This
+   game sets its title and its Discipline names in that role, so it picks its
+   own rather than inheriting a default it didn't choose. `mono` and `meta`
+   both resolve to the platform monospace now — the size, casing and tracking
+   below are what keep those two voices apart. */
+:root { --tantu-font-display: var(--tantu-font-body-fallback); }
+
 html, body, #root { height: 100%; }
 body {
   margin: 0;
@@ -89,7 +96,8 @@ body {
 }
 
 .snd-frame-note {
-  font-family: var(--tantu-font-meta);
+  /* Same rule: it is an aside in prose, and was written to read as one. */
+  font-family: var(--tantu-font-body);
   font-size: 11px;
   font-style: italic;
   opacity: 0.75;
@@ -133,7 +141,10 @@ body {
 
 /* Trial voice. Never a percentage — see BriefingScreen's TRIAL_VOICE. */
 .snd-trial-note {
-  font-family: var(--tantu-font-meta);
+  /* A full sentence, so it takes the prose role. It sat in the machine voice
+     until now, which made it the one prose-length string being recased and
+     slanted by a face that ships neither an italic nor a lowercase. */
+  font-family: var(--tantu-font-body);
   font-size: 12px;
   font-style: italic;
   color: var(--tantu-ink-secondary);
