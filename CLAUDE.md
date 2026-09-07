@@ -302,6 +302,35 @@ carry the live alignment reading as inline styles, and a CSS animation
 outranks an inline declaration — animating them silently overwrites the
 feedback the level is built on. Motion goes on the pseudo-elements.
 
+## Hand UI work to QA
+
+**Every change a player can see or press goes to the `qa-ui` agent** — anything
+under `src/screens/`, `src/components/`, `src/App.jsx` or `src/styles/`. Code
+it, run your own sanity checks, then hand it over. Your checks are not QA's:
+you know what you intended, and the point of the handover is what the code
+actually does.
+
+The handover carries what you changed, what you already ran, and what you are
+unsure about. QA writes the end-to-end, integration and accessibility tests,
+runs them in a real browser at phone width, and reports findings as findings.
+Do not summarise a run greener than it was, and do not treat a failing suite as
+a formality — the last three defects on this screen were all found after the
+author had satisfied himself the work was done:
+
+- a control nobody could find, because its label was a euphemism for the plain
+  verb the copy rules required;
+- a code field capped at six digits, silently truncating the eight-digit code
+  the service actually sends;
+- a title screen laid out in a 92px column on desktop, invisible at the width
+  it had been tested at.
+
+Committed suites live in `scripts/` and run from `npm test` and `npm run check`.
+A test written into a scratch directory and run once is not a test — this
+project has already reported green from a suite that had gone stale against the
+UI it was asserting on.
+
+---
+
 ## Adding a level
 
 **Read `docs/AUTHORING.md`.** Short version: add the object to its era module,
