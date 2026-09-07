@@ -11,6 +11,65 @@ largest script surface on it. The owner chose a dedicated hostname.
 
 ---
 
+## The account, as it actually is
+
+Answered on 2026-09-07 by running the three checks below against the live
+account. Recorded here so the next reader does not have to re-derive them, with
+the one thing still open marked as open.
+
+| | |
+|---|---|
+| Existing distribution | `E3EYLE59E156CK`, alias `aiweave.org` |
+| Its origin | `aiweave.org.s3-website-us-east-1.amazonaws.com` — a **website endpoint** |
+| Its cache config | legacy `ForwardedValues`, no cache policy. DefaultTTL 86400s, MaxTTL 1y. **MinTTL not yet read — see below** |
+| Wildcard certificate | `arn:aws:acm:us-east-1:239571291755:certificate/0a47510f-ad86-4e42-b079-64379ad14dbe` (`*.aiweave.org`, ISSUED, unused) |
+| Apex certificate | `arn:aws:acm:us-east-1:239571291755:certificate/12028150-7b57-456a-9f4b-24cd370a924b` (`aiweave.org`, ISSUED, in use) |
+| Hosted zone | `Z08177421DQ2ZF8VY74UQ` |
+
+So `OriginShape=Website` (the default), and *The REST origin trap* below does
+not apply.
+
+**Use the wildcard certificate, not the apex one.** `*.aiweave.org` covers
+`sounding.aiweave.org` by construction — one label, one wildcard — and that is
+the only alias this distribution has, so the wildcard is provably sufficient on
+its own. The apex certificate *may* carry `*.aiweave.org` as a subject
+alternative name, in which case it would work too, but its SANs have not been
+read and a certificate that does not cover an alias fails at
+`CreateDistribution` with an error that does not name the certificate. If you
+want to use the in-use one anyway, read its SANs first:
+
+```bash
+aws acm describe-certificate --region us-east-1 \
+  --certificate-arn arn:aws:acm:us-east-1:239571291755:certificate/12028150-7b57-456a-9f4b-24cd370a924b \
+  --query "Certificate.SubjectAlternativeNames"
+```
+
+There is no cost to using two certificates, and ACM renews both.
+
+**The one thing still open, and it matters for the bridge, not the game.** The
+existing distribution predates cache policies and uses legacy `ForwardedValues`
+with a 24-hour DefaultTTL. That distribution keeps serving the old
+`/sounding/` path, which after cutover holds the bridge page that carries
+players' saved progress across. A DefaultTTL only applies when the origin sends
+no `Cache-Control` at all, and the deploy uploads the bridge `no-store` and
+reads the header back — but a **MinTTL above zero would override that**, and
+MinTTL has not been read:
+
+```bash
+aws cloudfront get-distribution-config --id E3EYLE59E156CK \
+  --query "DistributionConfig.DefaultCacheBehavior.MinTTL"
+```
+
+Zero is the answer to hope for and almost certainly the answer. If it is not
+zero, the bridge would be cached for that long, and a player arriving in that
+window gets a stale page — which for the bridge means being handed a stale copy
+of their own progress. Fix it there rather than working around it here.
+
+The game's own distribution is unaffected either way: it is created by this
+stack with `Managed-CachingOptimized`, which respects the origin's headers.
+
+---
+
 ## What to check first
 
 Three things are unknown from outside the account and every one of them changes
@@ -72,66 +131,83 @@ account has been touched.
 
 ---
 
-## Apply
+## Applying it
 
-Run with the owner's own credentials. Nothing below is in CI.
+**This stack is applied by GitHub Actions, not by hand.** The
+`sounding-hosting` job in `rajatarun/aiweave/.github/workflows/deploy.yaml`
+runs `cloudformation deploy` against it using the same OIDC role the site
+already deploys with — `teamweave-github-actions-sam-deployer`, which
+`rajatarun/ContextWeave` has been deploying CloudFormation with for some time.
+No capability flag is needed: this template creates a certificate, an origin
+access control, a response headers policy, a distribution and a DNS record, and
+no IAM resource of any kind.
+
+The job is guarded two ways, and both matter:
+
+- `if: vars.SOUNDING_OWN_ORIGIN == 'true'` — it does not exist until you ask
+  for it.
+- `needs: sounding` — it runs only *after* the publish job, never beside it.
+  The stack creates the distribution **and** the DNS record, so the moment it
+  finishes the hostname resolves; a hostname resolving to an empty origin
+  prefix serves an error to whoever reaches it. The dependency is what
+  guarantees a build is already sitting in `sounding-app/`.
+
+It then asks the distribution for the document and fails if the answer is not
+the game — a certificate that does not cover the alias, or an empty prefix,
+both produce a stack that reports success and a hostname that does not work.
+
+Running it by hand is still possible and is the same command:
 
 ```bash
-# 1. Answer the three questions above, then create the stack.
 aws cloudformation deploy \
   --region us-east-1 \
   --stack-name sounding-hosting \
   --template-file infra/sounding-hosting.yaml \
+  --no-fail-on-empty-changeset \
   --parameter-overrides \
       OriginShape=Website \
-      CertificateArn= \
-      HostedZoneId= \
-  --no-execute-changeset   # drop this once the change set reads correctly
-
-# 2. Read the outputs. DistributionDomainName is what you test against.
-aws cloudformation describe-stacks --region us-east-1 \
-  --stack-name sounding-hosting --query "Stacks[0].Outputs"
+      CertificateArn=arn:aws:acm:us-east-1:239571291755:certificate/0a47510f-ad86-4e42-b079-64379ad14dbe \
+      HostedZoneId=Z08177421DQ2ZF8VY74UQ
 ```
 
-**Publish before pointing DNS.** The distribution serves nothing until the
-origin prefix has a build in it. Push a root-based build to
-`s3://aiweave.org/sounding-app/` first — see *The deploy workflow* below —
-then:
-
-```bash
-# 3. Prove the whole thing on the CloudFront name, with nothing pointing at it.
-curl -sI https://<DistributionDomainName>/ | head -20
-```
-
-Expect `200`, `content-type: text/html`, and a `cache-control` containing
-`no-store`. Open it in a browser and play a trial. Only when that works:
-
-```bash
-# 4. DNS. Skip if HostedZoneId was passed — the stack already did it.
-#    Otherwise create sounding.aiweave.org as an ALIAS/CNAME to
-#    <DistributionDomainName>.
-```
-
-DNS propagation and CloudFront deployment are both minutes, not seconds.
+The certificate and zone are repository variables in aiweave —
+`SOUNDING_CERT_ARN` and `SOUNDING_HOSTED_ZONE_ID` — defaulting to those values,
+so they can move without a code change.
 
 ---
 
 ## Cutover, in the order that cannot strand anyone
 
-The order matters because the bridge page at the old path sends players to the
-new hostname. Publish the bridge before that hostname works and you have sent
-someone to an address that does not resolve.
+Two repository variables in `rajatarun/aiweave`, set one at a time. The gap
+between them is the whole safety property.
 
-1. Publish the root-based build to `sounding-app/`.
-2. Verify on `DistributionDomainName`.
-3. Create DNS, verify `https://sounding.aiweave.org/` in a browser.
-4. **Only then** publish `legacy-origin/index.html` over the old `sounding/`
-   prefix.
+**Phase 1 — `SOUNDING_OWN_ORIGIN=true`, then run the deploy.**
 
-Step 4 is the irreversible-feeling one and it is not: the bridge reads the old
-origin's storage and hands it over in the URL fragment without deleting it, so
-a player who is interrupted still has their save on the old origin and simply
-repeats the handoff next time. See `src/engine/handoff.js`.
+The game is built for `/`, published to `sounding-app/`, and the stack creates
+the distribution, the DNS record and nothing else. `aiweave.org/sounding/` is
+untouched and still serves the previous build, so **nobody is affected yet if
+this goes wrong.** The job proves the new hostname serves the game before it
+reports success.
+
+Then open `https://sounding.aiweave.org/` yourself and play a trial. On a
+phone, with headphones — everything this project says about testing still
+applies.
+
+**Phase 2 — `SOUNDING_BRIDGE_LIVE=true`, then run the deploy again.**
+
+Only now does `legacy-origin/index.html` replace the old path. Until this is
+set, that path keeps serving the old game, which is a perfectly good state to
+sit in for as long as you like.
+
+The order is not fussiness. The bridge's entire purpose is to send players to
+the new hostname carrying their saved progress in the URL fragment; publish it
+before that hostname resolves and it sends them somewhere that does not answer
+while holding the only copy of their place in the game.
+
+Rolling back is unsetting the variables and re-running: phase 2 unset restores
+the old game to the old path, phase 1 unset republishes it to `sounding/` as
+well. Neither deletes anything a player is holding — the bridge never removes
+the copy it reads.
 
 ---
 
@@ -205,19 +281,23 @@ the bucket is already public-read.
 
 ## The deploy workflow
 
-The `sounding` job in `rajatarun/aiweave/.github/workflows/deploy.yaml` needs
-three changes, and they are written to be safe to merge **before** the stack
-exists — the cutover is a repository variable, not a merge.
+The `sounding` job in `rajatarun/aiweave/.github/workflows/deploy.yaml`
+publishes the game; `sounding-hosting`, which `needs` it, provisions the
+hostname. Both are inert until the variables are set, so all of it merges
+safely ahead of any decision.
 
-| | before | after |
+| | before | after cutover |
 |---|---|---|
 | base path | `/sounding/` | `/` |
 | destination | `s3://aiweave.org/sounding/` | `s3://aiweave.org/sounding-app/` |
-| old prefix | the game | `legacy-origin/index.html` |
+| old prefix | the game | `legacy-origin/index.html`, once phase 2 is set |
 
-Set the repository **variable** `SOUNDING_OWN_ORIGIN` to `true` in
-`rajatarun/aiweave` to cut over, and unset it to fall back. Until it is set the
-job behaves exactly as it does today.
+| variable | effect |
+|---|---|
+| `SOUNDING_OWN_ORIGIN` | publish to the new prefix and provision the hostname |
+| `SOUNDING_BRIDGE_LIVE` | put the bridge over the old path |
+| `SOUNDING_CERT_ARN` | override the certificate (defaults to the wildcard) |
+| `SOUNDING_HOSTED_ZONE_ID` | override the zone (defaults to `Z08177421DQ2ZF8VY74UQ`) |
 
 ---
 
