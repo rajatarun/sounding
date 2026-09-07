@@ -18,7 +18,7 @@ types an email address and presses one control. The client behind it:
 1. calls `SignUp`;
 2. if that comes back `UsernameExistsException`, silently calls `InitiateAuth`
    instead;
-3. either way ends on the same screen asking for a six-digit code.
+3. either way ends on the same screen asking for a code.
 
 Which branch was taken is remembered internally so the code goes to the right
 API. **It is never surfaced.** Two reasons, and both matter:
@@ -56,7 +56,7 @@ whether an account exists.
 | id | reached by | must be drawable |
 |---|---|---|
 | `signed-out` | first visit, sign-out, account deletion | the address field, the single control, and a plain statement that an account is optional |
-| `awaiting-code` | address accepted, code emailed | code field (6 digits, numeric keyboard on mobile), the **masked** destination, "send another code" |
+| `awaiting-code` | address accepted, code emailed | code field (numeric keyboard on mobile, **no fixed length** — see below), the **masked** destination, "send another code" |
 | `signed-in` | code accepted | the address, sync status, sign out, sign out everywhere, delete account |
 
 ### Pending states
@@ -91,7 +91,7 @@ went wrong" is how a player ends up retyping a correct address six times.
 | id | what happened | what the player must be able to do |
 |---|---|---|
 | `address-rejected` | not a well-formed address | fix it in place — the field keeps focus and its text |
-| `code-rejected` | wrong six digits | try again; the field clears, focus returns to it |
+| `code-rejected` | wrong code | try again; the field clears, focus returns to it |
 | `code-expired` | the code timed out, or too many wrong attempts killed the session | **request a new code** — the retry control must be present and enabled, because there is no way forward without it |
 | `rate-limited` | Cognito refused: too many attempts | wait. The control is disabled and the copy says roughly how long. Do not offer a retry that will also fail |
 | `delivery-failed` | Cognito could not send the email | **go back and change the address.** Distinct from `rate-limited`: waiting will not help |
@@ -121,6 +121,14 @@ assume it was arrived at from a submission in the same session.
 ---
 
 ## Rules that are not negotiable
+
+**Do not size the code field.** `ConfirmSignUp` sends six digits and the
+`EMAIL_OTP` challenge sends eight, so a field capped at either length announces
+which branch the player is on — which is to say whether that address already
+had an account. That is the one question this flow exists to refuse, and a
+`maxLength` is a strange place to answer it. Accept both, advertise neither,
+and let the service reject a wrong code. A cap of six shipped once and silently
+truncated an eight-digit code to its first six before calling it wrong.
 
 **Mask the destination.** `awaiting-code` shows where the code went, and the
 API hands back a masked form (`a***@e***.com`). Show that, not the address the
