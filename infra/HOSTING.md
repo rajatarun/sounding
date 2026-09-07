@@ -11,6 +11,65 @@ largest script surface on it. The owner chose a dedicated hostname.
 
 ---
 
+## The account, as it actually is
+
+Answered on 2026-09-07 by running the three checks below against the live
+account. Recorded here so the next reader does not have to re-derive them, with
+the one thing still open marked as open.
+
+| | |
+|---|---|
+| Existing distribution | `E3EYLE59E156CK`, alias `aiweave.org` |
+| Its origin | `aiweave.org.s3-website-us-east-1.amazonaws.com` — a **website endpoint** |
+| Its cache config | legacy `ForwardedValues`, no cache policy. DefaultTTL 86400s, MaxTTL 1y. **MinTTL not yet read — see below** |
+| Wildcard certificate | `arn:aws:acm:us-east-1:239571291755:certificate/0a47510f-ad86-4e42-b079-64379ad14dbe` (`*.aiweave.org`, ISSUED, unused) |
+| Apex certificate | `arn:aws:acm:us-east-1:239571291755:certificate/12028150-7b57-456a-9f4b-24cd370a924b` (`aiweave.org`, ISSUED, in use) |
+| Hosted zone | `Z08177421DQ2ZF8VY74UQ` |
+
+So `OriginShape=Website` (the default), and *The REST origin trap* below does
+not apply.
+
+**Use the wildcard certificate, not the apex one.** `*.aiweave.org` covers
+`sounding.aiweave.org` by construction — one label, one wildcard — and that is
+the only alias this distribution has, so the wildcard is provably sufficient on
+its own. The apex certificate *may* carry `*.aiweave.org` as a subject
+alternative name, in which case it would work too, but its SANs have not been
+read and a certificate that does not cover an alias fails at
+`CreateDistribution` with an error that does not name the certificate. If you
+want to use the in-use one anyway, read its SANs first:
+
+```bash
+aws acm describe-certificate --region us-east-1 \
+  --certificate-arn arn:aws:acm:us-east-1:239571291755:certificate/12028150-7b57-456a-9f4b-24cd370a924b \
+  --query "Certificate.SubjectAlternativeNames"
+```
+
+There is no cost to using two certificates, and ACM renews both.
+
+**The one thing still open, and it matters for the bridge, not the game.** The
+existing distribution predates cache policies and uses legacy `ForwardedValues`
+with a 24-hour DefaultTTL. That distribution keeps serving the old
+`/sounding/` path, which after cutover holds the bridge page that carries
+players' saved progress across. A DefaultTTL only applies when the origin sends
+no `Cache-Control` at all, and the deploy uploads the bridge `no-store` and
+reads the header back — but a **MinTTL above zero would override that**, and
+MinTTL has not been read:
+
+```bash
+aws cloudfront get-distribution-config --id E3EYLE59E156CK \
+  --query "DistributionConfig.DefaultCacheBehavior.MinTTL"
+```
+
+Zero is the answer to hope for and almost certainly the answer. If it is not
+zero, the bridge would be cached for that long, and a player arriving in that
+window gets a stale page — which for the bridge means being handed a stale copy
+of their own progress. Fix it there rather than working around it here.
+
+The game's own distribution is unaffected either way: it is created by this
+stack with `Managed-CachingOptimized`, which respects the origin's headers.
+
+---
+
 ## What to check first
 
 Three things are unknown from outside the account and every one of them changes
@@ -84,8 +143,8 @@ aws cloudformation deploy \
   --template-file infra/sounding-hosting.yaml \
   --parameter-overrides \
       OriginShape=Website \
-      CertificateArn= \
-      HostedZoneId= \
+      CertificateArn=arn:aws:acm:us-east-1:239571291755:certificate/0a47510f-ad86-4e42-b079-64379ad14dbe \
+      HostedZoneId=Z08177421DQ2ZF8VY74UQ \
   --no-execute-changeset   # drop this once the change set reads correctly
 
 # 2. Read the outputs. DistributionDomainName is what you test against.
