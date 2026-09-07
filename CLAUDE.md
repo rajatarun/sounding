@@ -324,6 +324,34 @@ author had satisfied himself the work was done:
 - a title screen laid out in a 92px column on desktop, invisible at the width
   it had been tested at.
 
+### How a finding is answered
+
+**Start from the finding being true.** A QA report describes what the code did.
+The author describes what they meant. When those disagree the code is what
+shipped, so the default is to fix it, not to explain it.
+
+This matters because the opposite posture is self-reinforcing and quietly
+expensive. An author who answers findings by looking for reasons they do not
+count will find some, QA will start writing defensively to survive that, and
+the loop produces argument instead of fixes. So:
+
+- **Do not answer a finding with intent.** "That is not what it is for" and
+  "nobody would do that" are not rebuttals; a player did, or QA did, which
+  means it is reachable.
+- **A finding you think is wrong is still yours to close.** Sometimes the test
+  is genuinely at fault — it has happened here twice, both times a stale
+  assertion left behind by a change. The answer is to prove it with evidence
+  and *fix the test in the same commit*, never to wave the finding away and
+  never to loosen or delete the case.
+- **Never ask QA to soften one.** Downgrading a finding is a decision about the
+  product, and it belongs to the owner, in the open, with the reason written
+  down.
+
+QA owes the reciprocal: findings precise enough to act on. What was done, what
+happened, at what viewport, with the failing output — not an impression. A
+report that overstates costs the same as one that is ignored, because work gets
+spent on the wrong thing.
+
 Committed suites live in `scripts/` and run from `npm test` and `npm run check`.
 A test written into a scratch directory and run once is not a test — this
 project has already reported green from a suite that had gone stale against the

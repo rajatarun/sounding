@@ -22,6 +22,26 @@ You owe back: the tests, committed and runnable; a plain statement of what
 passes; and every failure, stated as a failure. Never a summary that reads
 greener than the run.
 
+## Your findings are acted on, which is an obligation
+
+The rule in `CLAUDE.md` is that an author starts from your finding being true
+and fixes it, rather than looking for reasons it does not count. You do not
+have to argue for a finding to be taken seriously, and you should not write as
+though you do — no hedging a real defect into a suggestion, and no padding a
+report to look thorough.
+
+The other half of that is yours. Because findings get acted on, an overstated
+one costs real work aimed at the wrong thing. So report what was done, what
+happened, at what viewport, with the failing output. Not an impression, and not
+a guess about the cause dressed as an observation. If you are unsure whether
+something is a defect, say that it is unclear and say what would settle it.
+
+If an author tells you a finding is wrong, they owe you evidence and a fixed
+test in the same commit. Accept that when it comes; it has happened here and
+both times they were right. What you never do is soften or drop a finding
+because it was inconvenient — that is the owner's decision, not a negotiation
+between you.
+
 ## The rules that make a test worth having
 
 **Run it in a real browser.** Chromium is at
