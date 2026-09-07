@@ -76,6 +76,18 @@ premise is a source that will not hold still had a source that never moved, and
 the binaural image contradicted every other channel. If a level's source
 bearing changes, `movePanner` is not optional.
 
+**The feedback field is drawn on every level, steering or not.** Presence, the
+breath word and the orb live in `.snd-voidfield`, and only the *drag surface*
+and its hint are conditional on `control !== 'breathe'`. The whole block used to
+be gated together, so levels 4 and 9 called `setPresence`, `setOrb` and
+`setWord` every frame into nothing at all. It showed up first as an
+accessibility defect: a presence mark's answer is a dye front, `pulse()`
+correctly refuses to draw one under reduced motion, and the static
+`[data-depth]` ladder that covers for it had no element to sit on — so on a
+breathe level a reduced-motion Seeker crossed 25/50/75/100% and nothing changed
+anywhere. Don't re-gate the field on the control scheme; gate the steering
+affordance, which is the only part that is actually about steering.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in
@@ -302,6 +314,63 @@ carry the live alignment reading as inline styles, and a CSS animation
 outranks an inline declaration — animating them silently overwrites the
 feedback the level is built on. Motion goes on the pseudo-elements.
 
+## Hand UI work to QA
+
+**Every change a player can see or press goes to the `qa-ui` agent** — anything
+under `src/screens/`, `src/components/`, `src/App.jsx` or `src/styles/`. Code
+it, run your own sanity checks, then hand it over. Your checks are not QA's:
+you know what you intended, and the point of the handover is what the code
+actually does.
+
+The handover carries what you changed, what you already ran, and what you are
+unsure about. QA writes the end-to-end, integration and accessibility tests,
+runs them in a real browser at phone width, and reports findings as findings.
+Do not summarise a run greener than it was, and do not treat a failing suite as
+a formality — the last three defects on this screen were all found after the
+author had satisfied himself the work was done:
+
+- a control nobody could find, because its label was a euphemism for the plain
+  verb the copy rules required;
+- a code field capped at six digits, silently truncating the eight-digit code
+  the service actually sends;
+- a title screen laid out in a 92px column on desktop, invisible at the width
+  it had been tested at.
+
+### How a finding is answered
+
+**Start from the finding being true.** A QA report describes what the code did.
+The author describes what they meant. When those disagree the code is what
+shipped, so the default is to fix it, not to explain it.
+
+This matters because the opposite posture is self-reinforcing and quietly
+expensive. An author who answers findings by looking for reasons they do not
+count will find some, QA will start writing defensively to survive that, and
+the loop produces argument instead of fixes. So:
+
+- **Do not answer a finding with intent.** "That is not what it is for" and
+  "nobody would do that" are not rebuttals; a player did, or QA did, which
+  means it is reachable.
+- **A finding you think is wrong is still yours to close.** Sometimes the test
+  is genuinely at fault — it has happened here twice, both times a stale
+  assertion left behind by a change. The answer is to prove it with evidence
+  and *fix the test in the same commit*, never to wave the finding away and
+  never to loosen or delete the case.
+- **Never ask QA to soften one.** Downgrading a finding is a decision about the
+  product, and it belongs to the owner, in the open, with the reason written
+  down.
+
+QA owes the reciprocal: findings precise enough to act on. What was done, what
+happened, at what viewport, with the failing output — not an impression. A
+report that overstates costs the same as one that is ignored, because work gets
+spent on the wrong thing.
+
+Committed suites live in `scripts/` and run from `npm test` and `npm run check`.
+A test written into a scratch directory and run once is not a test — this
+project has already reported green from a suite that had gone stale against the
+UI it was asserting on.
+
+---
+
 ## Adding a level
 
 **Read `docs/AUTHORING.md`.** Short version: add the object to its era module,
@@ -330,6 +399,16 @@ called that. That one is on the author.
 independently. The upgrade path is a thin native `WKWebView` wrapper that
 bridges head-tracking yaw into `Steering.turn()` — the engine already takes
 relative deltas, so this needs no gameplay changes. See `docs/ROADMAP.md`.
+
+**The account step-one branch is a request-count oracle.** A new address costs
+one Cognito call, a registered one costs two. The screen hides which branch you
+are on; the network does not. It cannot be closed from the client — the browser
+talks to Cognito directly, so anyone counting our requests can also read
+`UsernameExistsException` in the reply, and padding the count would buy a round
+trip and nothing else. The fix is an endpoint of our own that makes both
+branches one opaque call, which is provisioning, not a refactor: see
+`infra/README.md` § the address step, and the note above `submitAddress` in
+`src/account/session.js`.
 
 **Tuning is unvalidated.** The gain curves, hold durations, and trial scaling
 are reasoned guesses, not playtested numbers. `TRIAL_AUDIO_SCALE` was raised

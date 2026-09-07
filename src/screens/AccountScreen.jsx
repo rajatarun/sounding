@@ -5,7 +5,7 @@ import {
   submitAddress, submitCode, requestAnotherCode,
   signOutThisDevice, signOutAllDevices, deleteThisAccount, isSignedIn,
 } from '../account/session.js';
-import { hasUnsyncedChanges } from '../account/mirror.js';
+import { hasUnsyncedChanges, onSyncChange } from '../account/mirror.js';
 import { deleteProgress } from '../account/sync.js';
 import { idToken } from '../account/session.js';
 
@@ -66,21 +66,46 @@ export function AccountScreen({ onClose, onProgressChanged }) {
   const [failure, setFailure] = useState(null);
   const [fieldError, setFieldError] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // True once a sign-up confirmation has been accepted and a fresh code sent.
+  const [secondCode, setSecondCode] = useState(false);
+
+  // Read into state and subscribed to, rather than called during render: it
+  // was only ever re-read on a remount, so a sync that failed while the player
+  // sat on this screen told them nothing until they left and came back.
+  const [unsynced, setUnsynced] = useState(hasUnsyncedChanges);
+  useEffect(() => onSyncChange(setUnsynced), []);
 
   const codeRef = useRef(null);
+  const emailRef = useRef(null);
+  // Counts rejections rather than watching the message. Keying the effect on
+  // the error *string* meant a second identical wrong code changed no
+  // dependency, so focus stayed wherever the submit had left it — on a
+  // disabled button, which is to say on <body>.
+  const [rejections, setRejections] = useState(0);
 
-  // The code field is where a mistyped digit is corrected, so it takes focus
-  // when it appears and again whenever a wrong code clears it.
-  useEffect(() => { if (phase === 'code') codeRef.current?.focus(); }, [phase, fieldError]);
+  // Focus belongs on the field the player now has to correct: the code field
+  // whenever it is on screen or a code is refused, and the address field when
+  // the address itself was refused.
+  useEffect(() => {
+    if (phase === 'code') codeRef.current?.focus();
+    else if (phase === 'address' && fieldError) emailRef.current?.focus();
+  }, [phase, rejections]);
 
-  function settle(result, { onOk }) {
+  /**
+   * `fieldScoped` says whether this result came from submitting the field the
+   * error would land on. A failed *resend* returning `code-rejected` was
+   * putting "That code was not right" on the field and clearing what the
+   * player had typed — blaming them for a control they had not pressed.
+   */
+  function settle(result, { onOk, fieldScoped = true }) {
     setBusy(null);
     if (result.ok) { setFailure(null); setFieldError(null); onOk(result); return; }
     // A field-level problem belongs on the field; everything else is the
     // attempt as a whole and gets the notice.
-    if (result.state === 'address-rejected' || result.state === 'code-rejected') {
+    if (fieldScoped && (result.state === 'address-rejected' || result.state === 'code-rejected')) {
       setFieldError(MESSAGE[result.state]);
       setFailure(null);
+      setRejections((n) => n + 1);
       if (result.state === 'code-rejected') setCode('');
     } else {
       setFieldError(null);
@@ -101,8 +126,17 @@ export function AccountScreen({ onClose, onProgressChanged }) {
     setBusy('code');
     settle(await submitCode(code.trim()), {
       onOk: async (r) => {
-        // A confirmed sign-up sends a second code rather than a session.
-        if (r.state === 'awaiting-code') { setDestination(r.destination); setCode(''); return; }
+        // A confirmed sign-up sends a *second* code rather than a session, and
+        // the screen used to redraw character-for-character identical — right
+        // code, field cleared, nothing said. Indistinguishable from having done
+        // nothing, and a player retypes the code they already used.
+        if (r.state === 'awaiting-code') {
+          setDestination(r.destination);
+          setCode('');
+          setSecondCode(true);
+          return;
+        }
+        setSecondCode(false);
         setPhase('signed-in');
         await onProgressChanged();
       },
@@ -111,7 +145,10 @@ export function AccountScreen({ onClose, onProgressChanged }) {
 
   async function onResend() {
     setBusy('resend');
-    settle(await requestAnotherCode(), { onOk: (r) => { if (r.destination) setDestination(r.destination); } });
+    settle(await requestAnotherCode(), {
+      fieldScoped: false,
+      onOk: (r) => { if (r.destination) setDestination(r.destination); },
+    });
   }
 
   async function onDelete() {
@@ -119,7 +156,16 @@ export function AccountScreen({ onClose, onProgressChanged }) {
     // Order matters and the dialog is persistent because of it: the row is
     // keyed to a subject nothing can authenticate as once the account is gone,
     // so deleting the account first would strand it forever.
-    await deleteProgress(idToken());
+    //
+    // Which is why the first call's result is not discardable. It was, and the
+    // deletion carried on through a failed erase to delete the account anyway
+    // — producing exactly the orphan the ordering exists to prevent, silently.
+    const erased = await deleteProgress(idToken());
+    if (!erased.ok) {
+      setConfirmDelete(false);
+      settle(erased, { onOk: () => {} });
+      return;
+    }
     const r = await deleteThisAccount();
     setConfirmDelete(false);
     settle(r, { onOk: () => setPhase('address') });
@@ -140,6 +186,7 @@ export function AccountScreen({ onClose, onProgressChanged }) {
               device — nothing else. Everything works without one.
             </TantuNotice>
             <TantuInput
+              ref={emailRef}
               label="Email"
               type="email"
               autoComplete="email"
@@ -171,14 +218,24 @@ export function AccountScreen({ onClose, onProgressChanged }) {
 
         {phase === 'code' && (
           <form onSubmit={onSubmitCode}>
-            <div className="snd-brief-label">Enter the code</div>
+            <div className="snd-brief-label">
+              {secondCode ? 'One more code' : 'Enter the code'}
+            </div>
+            {secondCode && (
+              <TantuNotice tone="info">
+                That code was accepted. A second one has just been sent — enter
+                it to finish signing in.
+              </TantuNotice>
+            )}
             <TantuInput
               ref={codeRef}
               label="Verification code"
               /* The masked destination, never the address the player typed: on
                  a phone in a public place, re-displaying it turns a glance
                  over the shoulder into a disclosure. */
-              hint={destination ? `Sent to ${destination}` : undefined}
+              hint={destination
+                ? `${secondCode ? 'A new code has been sent to' : 'Sent to'} ${destination}`
+                : undefined}
               inputMode="numeric"
               autoComplete="one-time-code"
               /* No fixed length, and that is not laziness — it is the same
@@ -220,7 +277,7 @@ export function AccountScreen({ onClose, onProgressChanged }) {
               </TantuButton>
             </div>
             <div className="snd-btnrow">
-              <TantuButton type="button" variant="ghost" bleed={false} onClick={() => { setPhase('address'); setCode(''); setFailure(null); setFieldError(null); }}>
+              <TantuButton type="button" variant="ghost" bleed={false} onClick={() => { setPhase('address'); setCode(''); setFailure(null); setFieldError(null); setSecondCode(false); }}>
                 Use a different address
               </TantuButton>
             </div>
@@ -237,7 +294,7 @@ export function AccountScreen({ onClose, onProgressChanged }) {
               Your place in the game is carried to any device you sign in on.
             </TantuNotice>
             {/* A resting fact, never a spinner and never during play. */}
-            {hasUnsyncedChanges() && (
+            {unsynced && (
               <TantuNotice tone="caution">
                 This device has progress that hasn&apos;t reached your account yet.
                 It will try again next time.
@@ -251,8 +308,14 @@ export function AccountScreen({ onClose, onProgressChanged }) {
               </TantuButton>
             </div>
             <div className="snd-btnrow">
-              <TantuButton variant="ghost" bleed={false} onClick={async () => { setBusy('signout'); await signOutAllDevices(); setBusy(null); setPhase('address'); }}>
-                Sign out everywhere
+              {/* The result is not discardable: GlobalSignOut can fail, and
+                  returning to the sign-in form regardless tells a player their
+                  other devices are signed out when they are still signed in. */}
+              <TantuButton variant="ghost" bleed={false} disabled={busy === 'signout'} onClick={async () => {
+                setBusy('signout');
+                settle(await signOutAllDevices(), { onOk: () => setPhase('address') });
+              }}>
+                {busy === 'signout' ? 'Signing out…' : 'Sign out everywhere'}
               </TantuButton>
               <TantuButton variant="ghost" bleed={false} onClick={() => setConfirmDelete(true)}>
                 Delete account

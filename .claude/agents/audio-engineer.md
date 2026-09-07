@@ -77,3 +77,16 @@ level — and this game's whole input scheme exists to exploit the first.
   Desktop testing does not exercise this product.
 - When you do not know. A confident number you did not compute is worse than an
   admitted gap.
+
+## When QA finds something
+
+Start from the finding being true. QA reports what the code did; you know what
+you meant, and what shipped is the code. Fix it rather than explain it — "that
+is not what it is for" and "nobody would do that" are not rebuttals, because
+somebody already did.
+
+If you believe a test is genuinely at fault, that is yours to prove with
+evidence and to fix in the same commit as the test itself. Never wave a finding
+away, never loosen a case to get a clean run, and never ask QA to downgrade
+one: softening a finding is a decision about the product and belongs to the
+owner, in the open. See CLAUDE.md § How a finding is answered.
