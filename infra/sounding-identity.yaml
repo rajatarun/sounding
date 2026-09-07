@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+# SOUNDING — player identity and cross-device progress sync.
+#
+# PROPOSAL. Nothing here has been applied. There are no AWS credentials in the
+# environment this was written in, and this account already serves three other
+# deliverables from the same bucket and the same GitHub OIDC role.
+#
+# This stack is deliberately SELF-CONTAINED and ADDITIVE:
+#
+#   - It creates no bucket, touches no bucket policy, and does not know the
+#     name of the site bucket.
+#   - It does not modify, reference or require any change to
+#     arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer.
+#     That role is trusted for aiweave.org, Storybook and the playground, and
+#     widening it to provision Cognito, IAM, Lambda and API Gateway would put
+#     three shipping deliverables behind an identity change. Apply this stack
+#     ONCE, by hand, with the account owner's own credentials. See APPLY.md.
+#   - Its outputs are public client identifiers, not secrets. A user pool id
+#     and an app client id with no client secret are designed to be readable in
+#     a browser bundle. They are committed to the game's source, so the deploy
+#     workflow in rajatarun/aiweave needs no new variables and no new secrets.
+#
+# Undoing it is one `aws cloudformation delete-stack`, after clearing the two
+# deletion protections named below. Nothing outside the stack changes state.
+
+Description: >-
+  SOUNDING player accounts: a passwordless Cognito user pool, and a
+  three-route progress store whose records cannot carry a date.
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Default: https://aiweave.org
+    Description: >-
+      The exact origin the game is served from, for the API's CORS policy. It
+      must be https. UNVERIFIED FROM HERE: the deploy workflow publishes to an
+      S3 *website* endpoint, which serves plain HTTP; whether aiweave.org has
+      TLS in front of it could not be checked from this environment and is a
+      blocking precondition. See README.md § The TLS precondition.
+
+  SesSourceArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of a verified Amazon SES identity for sign-in codes. Leave empty to
+      use Cognito's built-in sender, which is capped at roughly 50 messages per
+      day for the whole account — fine for a private pilot, not for launch.
+      Setting this also requires the account to be out of the SES sandbox in
+      us-east-1, which is a manual request with a lead time.
+
+  RefreshTokenDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
+    Description: >-
+      How long a signed-in device stays signed in without another emailed code.
+      30 days is the Cognito default. Longer is kinder to a game somebody opens
+      once a fortnight; longer is also exactly how long a stolen refresh token
+      keeps working, since this pool does not enable rotation.
+
+Conditions:
+  UseSes: !Not [!Equals [!Ref SesSourceArn, ""]]
+
+Resources:
+
+  # ---------------------------------------------------------------- identity
+
+  PlayerPool:
+    Type: AWS::Cognito::UserPool
+    # Protects every player account from an accidental `delete-stack`. To
+    # actually tear the stack down, turn it off first:
+    #   aws cognito-idp update-user-pool --user-pool-id <id> \
+    #     --deletion-protection INACTIVE
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-players"
+      DeletionProtection: ACTIVE
+
+      # ESSENTIALS is required for choice-based auth (the USER_AUTH flow), which
+      # is what makes EMAIL_OTP possible. LITE cannot do passwordless. Both
+      # tiers carry the same 10,000 MAU free allowance.
+      UserPoolTier: ESSENTIALS
+
+      # The email address is the username. Nothing else is collected: no name,
+      # no phone number, no birthdate, no locale, no picture. A pool that does
+      # not have the attribute cannot leak it and cannot be asked to delete it.
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+      # No custom attributes, and this is load-bearing rather than an omission.
+      # A `custom:progress` attribute is the obvious place to put the 54-byte
+      # blob and would remove a whole table, an API and a function from this
+      # stack — but writing a user attribute updates the user record's
+      # UserLastModifiedDate, which would turn every player's Cognito record
+      # into a last-played timestamp, updated on every trial, visible in the
+      # console. See README.md § 3. Progress lives in DynamoDB precisely so
+      # that this pool's only date is the one it stamps at sign-up.
+
+      # No LambdaConfig. A PreAuthentication or PostAuthentication trigger is
+      # the other place a lastSeenAt arrives unannounced, and there is nothing
+      # this game needs one for.
+
+      Policies:
+        # Passwordless. EMAIL_OTP is the only first factor the pool will accept,
+        # so there is no password to choose, forget, reset, reuse or leak, and
+        # no password-policy state for the UI to draw.
+        SignInPolicy:
+          AllowedFirstAuthFactors: [EMAIL_OTP]
+
+      MfaConfiguration: "OFF"
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+
+      EmailConfiguration: !If
+        - UseSes
+        - EmailSendingAccount: DEVELOPER
+          SourceArn: !Ref SesSourceArn
+          From: !Sub "SOUNDING <no-reply@${AllowedOrigin}>"
+        - EmailSendingAccount: COGNITO_DEFAULT
+
+      # The one piece of copy this stack owns. It is a transactional email, not
+      # a place to be atmospheric, and it borrows nothing from the design
+      # system's vocabulary — see CLAUDE.md § The UI runs on Tantu.
+      EmailVerificationSubject: "Your SOUNDING sign-in code"
+      EmailVerificationMessage: "Your sign-in code is {####}. It is good for a few minutes."
+
+  PlayerPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-web"
+      UserPoolId: !Ref PlayerPool
+
+      # A browser cannot keep a secret, so it is not given one. This is what
+      # makes the client id safe to commit.
+      GenerateSecret: false
+
+      ExplicitAuthFlows:
+        - ALLOW_USER_AUTH          # choice-based; EMAIL_OTP rides on this
+        - ALLOW_REFRESH_TOKEN_AUTH
+      # Deliberately absent: ALLOW_USER_PASSWORD_AUTH (would send a plaintext
+      # password to Cognito), ALLOW_USER_SRP_AUTH and ALLOW_ADMIN_USER_PASSWORD_AUTH.
+      # A pool with no passwords needs none of them, and leaving them off means
+      # a future password path is a reviewed template change, not a mistake.
+
+      # A wrong address and an unregistered address must answer identically, or
+      # this endpoint becomes a way to test whether a given person plays this
+      # game. Cognito does the collapsing; cognito.js does the rest.
+      PreventUserExistenceErrors: ENABLED
+
+      EnableTokenRevocation: true
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      RefreshTokenValidity: !Ref RefreshTokenDays
+
+      # The client may read and write one attribute, which is the only one that
+      # exists. Named rather than defaulted, so adding an attribute later does
+      # not silently hand it to the browser.
+      ReadAttributes: [email]
+      WriteAttributes: [email]
+
+      # No AllowedOAuthFlows, no CallbackURLs, no UserPoolDomain resource
+      # anywhere in this stack. The Cognito Hosted UI / Managed Login is
+      # therefore not merely unused, it does not exist for this pool: there is
+      # no domain to serve it from. The login surface is Tantu's, or it is
+      # nothing.
+
+  # ------------------------------------------------------------ progress store
+
+  ProgressTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${AWS::StackName}-progress"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sub
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sub
+          KeyType: HASH
+      DeletionProtectionEnabled: true
+
+      # Everything below is off on purpose, and each one is a date that would
+      # otherwise exist:
+      #
+      #   PointInTimeRecoverySpecification — a rolling 35-day history of every
+      #     write is a record of exactly when each Seeker played. Off. The cost
+      #     is that there is no undo for a bad write; the blob is 40 bytes that
+      #     the client can rebuild from localStorage, so that cost is small.
+      #   StreamSpecification — a change stream is a timestamped feed of who
+      #     just played, and the thing every analytics feature attaches to. Off.
+      #   TimeToLiveSpecification — a TTL attribute is an expiry date stored on
+      #     the record. Off, and there is no attribute to put one in.
+      #
+      # Encryption is DynamoDB's default AWS-owned key: encrypted at rest, no
+      # KMS charge, and no key policy to get wrong for data that is 40 bytes of
+      # which trials somebody finished.
+
+  ProgressFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: progress-item-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Three actions, one table, addressed one item at a time.
+              # Scan and Query are absent deliberately: a Scan is how a future
+              # "how many people are playing" feature reads every Seeker's row,
+              # and this role physically cannot. BatchGetItem and
+              # BatchWriteItem are absent for the same reason.
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt ProgressTable.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt ProgressLogGroup.Arn
+              # logs:CreateLogGroup is not granted: the group is declared below,
+              # so the function never needs to make one, and a role that cannot
+              # create log groups cannot create one somewhere with a longer
+              # retention than the one this stack sets.
+
+  ProgressLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-progress"
+      # The shortest retention CloudWatch offers. The function logs nothing
+      # itself, but the runtime writes a START/END/REPORT line per invocation,
+      # and those lines are a timestamped record that somebody played. One day
+      # is enough to debug a deploy and short enough not to become a history.
+      RetentionInDays: 1
+
+  ProgressFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-progress"
+      Role: !GetAtt ProgressFunctionRole.Arn
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 256
+      Timeout: 5
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ProgressTable
+      # Inlined rather than packaged so that the code that runs is the code in
+      # the review, and applying this stack needs no artifact bucket and no
+      # build step. It is a verbatim copy of infra/lambda/index.js;
+      # `node infra/check-inline.mjs` fails if the two drift apart.
+      Code:
+        ZipFile: |
+          /**
+           * index.js — the entire server side of SOUNDING's account sync.
+           *
+           * CommonJS, not ESM, because this file is inlined verbatim into
+           * infra/sounding-identity.yaml as Lambda `Code.ZipFile`, which lands on disk as
+           * index.js in a package with no package.json — so `export` would not parse.
+           * `node infra/check-inline.mjs` fails if the template and this file diverge.
+           *
+           * The AWS SDK v3 is provided by the nodejs22.x runtime; nothing is bundled and
+           * there is no build step. AWS documents the bundled SDK as a convenience whose
+           * minor version they may move, which for GetItem/PutItem/DeleteItem is a risk
+           * worth taking to keep this a template and not a pipeline.
+           *
+           * WHAT THIS FUNCTION IS NOT ALLOWED TO DO, and structurally cannot:
+           *
+           *  - It never reads the request body's idea of who the caller is. The
+           *    partition key comes from requestContext.authorizer.jwt.claims.sub, which
+           *    API Gateway's JWT authorizer set only after verifying the token's
+           *    signature against the pool's JWKS, its issuer, its audience and its
+           *    expiry. A client cannot address another Seeker's row.
+           *  - It never writes a timestamp. There is no updatedAt, no TTL attribute, no
+           *    stream on the table and no point-in-time recovery, so DynamoDB stamps
+           *    nothing of its own. An item is exactly { sub, p }.
+           *  - It never sees an email address. `sub` is an opaque UUID; the token's
+           *    `email` claim is present in the event and deliberately unread.
+           *  - It logs nothing per request. The runtime's own START/END/REPORT lines are
+           *    a timestamped record that *some* account was active, and they carry a
+           *    request id rather than a subject. Retention is one day. See
+           *    infra/README.md § The residue.
+           */
+
+          const {
+            DynamoDBClient,
+            GetItemCommand,
+            PutItemCommand,
+            DeleteItemCommand,
+          } = require('@aws-sdk/client-dynamodb');
+
+          const ddb = new DynamoDBClient({});
+          const TABLE = process.env.TABLE_NAME;
+
+          /**
+           * 54 base64url characters and nothing else — the fixed width of the bitfield in
+           * infra/reference-client/progress-codec.js. This is the check that makes the
+           * "no dates" rule enforceable rather than merely intended: an ISO 8601 date is
+           * the wrong alphabet and the wrong length, a JSON object is the wrong alphabet,
+           * and a blob one byte longer than the fixed width is rejected outright. There
+           * is no field to add one to and no room to append one.
+           */
+          const BLOB = /^[A-Za-z0-9_-]{54}$/;
+
+          const reply = (statusCode, body) => ({
+            statusCode,
+            headers: body ? { 'content-type': 'application/json' } : {},
+            body: body ? JSON.stringify(body) : '',
+          });
+
+          exports.handler = async (event) => {
+            const claims = event && event.requestContext && event.requestContext.authorizer
+              && event.requestContext.authorizer.jwt && event.requestContext.authorizer.jwt.claims;
+            const sub = claims && claims.sub;
+            if (typeof sub !== 'string' || sub.length === 0) return reply(401, { error: 'no-subject' });
+
+            const key = { sub: { S: sub } };
+            const method = event.requestContext.http.method;
+
+            try {
+              if (method === 'GET') {
+                const out = await ddb.send(new GetItemCommand({ TableName: TABLE, Key: key }));
+                return reply(200, { p: (out.Item && out.Item.p && out.Item.p.S) || null });
+              }
+
+              if (method === 'PUT') {
+                let blob;
+                try {
+                  blob = JSON.parse(event.body || '{}').p;
+                } catch (e) {
+                  return reply(400, { error: 'bad-json' });
+                }
+                if (!BLOB.test(String(blob))) return reply(400, { error: 'bad-blob' });
+                // PutItem, not UpdateItem: the item is replaced wholesale by a literal
+                // two-attribute map, so no attribute can survive from an earlier write
+                // and none can be introduced by one.
+                await ddb.send(new PutItemCommand({
+                  TableName: TABLE,
+                  Item: { sub: { S: sub }, p: { S: blob } },
+                }));
+                return reply(204, null);
+              }
+
+              if (method === 'DELETE') {
+                await ddb.send(new DeleteItemCommand({ TableName: TABLE, Key: key }));
+                return reply(204, null);
+              }
+
+              return reply(405, { error: 'method' });
+            } catch (e) {
+              // Deliberately not echoed: a DynamoDB error message names the table and
+              // the account id.
+              return reply(500, { error: 'store' });
+            }
+          };
+
+  # ---------------------------------------------------------------------- api
+
+  ProgressApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-progress"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: [!Ref AllowedOrigin]
+        AllowMethods: [GET, PUT, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
+        MaxAge: 600
+        # AllowCredentials is not set. The id token travels in the
+        # Authorization header, never in a cookie, so the browser is never
+        # asked to attach ambient credentials to a cross-origin request.
+
+  ProgressAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ProgressApi
+      Name: player-jwt
+      AuthorizerType: JWT
+      IdentitySource: ["$request.header.Authorization"]
+      JwtConfiguration:
+        # Audience pins the token to this app client. Without it, a token minted
+        # by any client on this pool would open this API.
+        Audience: [!Ref PlayerPoolClient]
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${PlayerPool}"
+
+  ProgressIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ProgressApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ProgressFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  GetProgressRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProgressApi
+      RouteKey: "GET /progress"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProgressAuthorizer
+      Target: !Sub "integrations/${ProgressIntegration}"
+
+  PutProgressRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProgressApi
+      RouteKey: "PUT /progress"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProgressAuthorizer
+      Target: !Sub "integrations/${ProgressIntegration}"
+
+  DeleteProgressRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProgressApi
+      RouteKey: "DELETE /progress"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProgressAuthorizer
+      Target: !Sub "integrations/${ProgressIntegration}"
+
+  # There is no $default route. An unmatched path 404s at the edge rather than
+  # reaching the function.
+
+  ProgressStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ProgressApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        # A ceiling on the bill, not on the players. A Seeker syncs a few times
+        # an hour; a runaway retry loop in a released build could otherwise
+        # write DynamoDB and invoke Lambda as fast as a phone can ask.
+        ThrottlingRateLimit: 20
+        ThrottlingBurstLimit: 40
+      # AccessLogSettings is deliberately absent. An access log line carries a
+      # timestamp, a path and — with the usual $context.authorizer.claims.sub
+      # format — a subject: a per-player play history, in a log group, that
+      # nobody set out to create.
+
+  ProgressInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProgressFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ProgressApi}/*"
+
+Outputs:
+  UserPoolId:
+    Description: Public identifier. Commit it; it is not a secret.
+    Value: !Ref PlayerPool
+  UserPoolClientId:
+    Description: Public identifier, no client secret. Commit it; it is not a secret.
+    Value: !Ref PlayerPoolClient
+  ProgressApiUrl:
+    Description: Base URL for the progress store. Public; every route needs a token.
+    Value: !GetAtt ProgressApi.ApiEndpoint
+  ProgressTableName:
+    Value: !Ref ProgressTable
