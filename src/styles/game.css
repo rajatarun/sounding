@@ -314,19 +314,26 @@ body.snd-noscroll {
   box-shadow: 0 0 18px 5px color-mix(in srgb, var(--tantu-accent-structural) 45%, transparent);
 }
 
-.snd-presence-wrap {
+.snd-presence-wrap { width: 180px; }
+
+/* The bottom stack: bearing, then the reading, then the controls, in one
+   column that lays itself out. Each of these used to name its own `bottom`
+   offset — 120px, 96px, knot-8 — which is a layout that is correct only for
+   the button heights it was measured against, and it was not: the meter sat
+   inside the controls' band, 62% of it behind the turn buttons and 72% behind
+   a breathe level's single wide one. A column cannot overlap itself. */
+.snd-bottom {
   position: absolute;
-  bottom: 96px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 180px;
+  bottom: var(--tantu-knot-8);
+  inset-inline: 0;
   z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--tantu-knot-4);
 }
 
 .snd-heading-cue {
-  position: absolute;
-  bottom: 120px;
-  inset-inline: 0;
   padding: 0 var(--tantu-knot-6);
   text-align: center;
   font-family: var(--tantu-font-meta);
@@ -339,9 +346,7 @@ body.snd-noscroll {
 }
 
 .snd-controls-row {
-  position: absolute;
-  bottom: var(--tantu-knot-8);
-  inset-inline: 0;
+  width: 100%;
   padding: 0 var(--tantu-knot-8);
   display: flex;
   flex-wrap: wrap;
@@ -349,7 +354,6 @@ body.snd-noscroll {
   align-items: center;
   justify-content: center;
   gap: var(--tantu-knot-4);
-  z-index: 2;
 }
 
 /* A commit label can run long ("This is the crossing") — never let it push
@@ -500,14 +504,19 @@ body.snd-noscroll {
    The marks a sustained hold passes (GameScreen's MARKS). Continuous, and
    deliberately without a stinger at each one: the field simply grows more
    present, the way level 6's depths reveal by fading in rather than firing. */
-.snd-voidfield[data-depth="1"] .snd-breath-word { opacity: 0.72; }
-.snd-voidfield[data-depth="2"] .snd-breath-word { opacity: 0.84; letter-spacing: 0.18em; }
-.snd-voidfield[data-depth="3"] .snd-breath-word { opacity: 0.94; letter-spacing: 0.2em; }
-.snd-voidfield[data-depth="4"] .snd-breath-word { opacity: 1; letter-spacing: 0.22em; }
-.snd-voidfield[data-depth] .snd-presence-wrap { transition: filter 1.2s ease; }
-.snd-voidfield[data-depth="2"] .snd-presence-wrap { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--snd-force) 30%, transparent)); }
-.snd-voidfield[data-depth="3"] .snd-presence-wrap { filter: drop-shadow(0 0 7px color-mix(in srgb, var(--snd-force) 42%, transparent)); }
-.snd-voidfield[data-depth="4"] .snd-presence-wrap { filter: drop-shadow(0 0 11px color-mix(in srgb, var(--snd-force) 55%, transparent)); }
+.snd-screen-game[data-depth="1"] .snd-breath-word { opacity: 0.72; }
+.snd-screen-game[data-depth="2"] .snd-breath-word { opacity: 0.84; letter-spacing: 0.18em; }
+.snd-screen-game[data-depth="3"] .snd-breath-word { opacity: 0.94; letter-spacing: 0.2em; }
+.snd-screen-game[data-depth="4"] .snd-breath-word { opacity: 1; letter-spacing: 0.22em; }
+.snd-screen-game[data-depth] .snd-presence-wrap { transition: filter 1.2s ease; }
+/* Depth 1 is the 25% mark — the first one every player crosses, and the only
+   one a reduced-motion player used to meet with nothing but a 0.12 opacity
+   step on 16px of text. The ladder is four even rungs now, not three and a
+   nudge. */
+.snd-screen-game[data-depth="1"] .snd-presence-wrap { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--snd-force) 20%, transparent)); }
+.snd-screen-game[data-depth="2"] .snd-presence-wrap { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--snd-force) 30%, transparent)); }
+.snd-screen-game[data-depth="3"] .snd-presence-wrap { filter: drop-shadow(0 0 7px color-mix(in srgb, var(--snd-force) 42%, transparent)); }
+.snd-screen-game[data-depth="4"] .snd-presence-wrap { filter: drop-shadow(0 0 11px color-mix(in srgb, var(--snd-force) 55%, transparent)); }
 
 /* --- The completion beat -------------------------------------------- */
 .snd-beat {
