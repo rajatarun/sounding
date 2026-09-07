@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>SOUNDING has moved</title>
+<!--
+  The bridge at aiweave.org/sounding/.
+
+  SOUNDING now lives at its own origin, sounding.aiweave.org, so that its
+  storage is not shared with Storybook and the playground. Browser storage is
+  scoped to the ORIGIN, so the move orphans every resume point already written
+  under https://aiweave.org — and the only code that can ever read that storage
+  is a page served from that origin. This is that page.
+
+  Three things it must be, and each one rules something out:
+
+  - It must run JavaScript. An S3 website redirect rule or a 301 would answer
+    the bookmark and silently abandon the save, because a redirect never
+    executes on the old origin. That is the trap: the obvious answer loses the
+    data.
+  - It must hand the state over in the URL *fragment*. A fragment is never sent
+    to the server, so a Seeker's progress never appears in a CloudFront or S3
+    access log. A query string would put it in both.
+  - It must not delete the legacy copy. If the handoff is interrupted — the tab
+    closed mid-navigation, the new origin unreachable — the copy left here is
+    the only one there is. Coming back to this URL again simply repeats the
+    handoff; the receiving side merges rather than overwrites, so repeating it
+    is harmless.
+
+  No assets, no fonts, no framework: this file has to keep working long after
+  everything else under this prefix is gone.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: #0b0d10; color: #c8cdd4;
+    font: 15px/1.7 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 32rem; padding: 2rem; text-align: center; }
+  a { color: #9fb6c8; }
+  .quiet { color: #6a727d; font-size: 13px; margin-top: 1.25rem; }
+</style>
+</head>
+<body>
+<main>
+  <p>SOUNDING has moved to <a href="https://sounding.aiweave.org/">sounding.aiweave.org</a>.</p>
+  <p class="quiet">Carrying your place across. If nothing happens, follow the link — your progress will be waiting the next time you open this page.</p>
+  <noscript><p class="quiet">This page needs JavaScript to carry your saved place to the new address.</p></noscript>
+</main>
+<script>
+(function () {
+  var DEST = 'https://sounding.aiweave.org/';
+  var KEY  = 'sounding:progress:v1';        // must match src/engine/progress.js
+  var MARK = '#sounding-handoff-v1=';       // must match src/engine/handoff.js
+
+  var url = DEST;
+  try {
+    var raw = window.localStorage.getItem(KEY);
+    if (raw) {
+      // UTF-8 -> base64url. The stored document is ASCII today; encoding it
+      // properly anyway costs four lines and removes a whole class of
+      // "one Discipline name got a curly quote" bug.
+      var bytes = new TextEncoder().encode(raw), bin = '', i;
+      for (i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      url = DEST + MARK + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    // Deliberately NOT removing the item. See the note at the top of the file.
+  } catch (e) {
+    // Private mode, or storage disabled outright. Reading it can throw rather
+    // than return null, and a Seeker with nothing to carry must still arrive.
+  }
+
+  // replace(), not assign(): a back button that lands the player on a page
+  // whose only behaviour is to send them forward again is a trap.
+  window.location.replace(url);
+})();
+</script>
+</body>
+</html>

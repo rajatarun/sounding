@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "node scripts/check-levels.mjs",
-    "test": "node scripts/contract.test.mjs"
+    "test": "node scripts/contract.test.mjs && node scripts/handoff.test.mjs"
   },
   "dependencies": {
     "@weaveaijs/tantu": "^0.3.2",

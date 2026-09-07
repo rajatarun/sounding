@@ -1,0 +1,337 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+# SOUNDING — the game's own origin, sounding.aiweave.org.
+#
+# PROPOSAL. Nothing here has been applied. There are no AWS credentials in the
+# environment this was written in.
+#
+# WHY THIS EXISTS. The game shipped at https://aiweave.org/sounding/, sharing
+# one browser origin with the site, Storybook and the playground. Browser
+# storage is scoped to the origin and not to the path, so anything that runs
+# script on aiweave.org can read the game's storage — and Storybook, which
+# renders arbitrary component stories, is by far the largest script surface on
+# that origin. The owner has chosen to give the game its own hostname. This
+# stack is that hostname.
+#
+# WHAT IT DELIBERATELY DOES NOT DO:
+#
+#   - It does not create, modify or delete the aiweave.org bucket, its public
+#     access block, its website configuration or its bucket policy. It only
+#     names the bucket as an origin. Every one of those settings is re-asserted
+#     on every run of the `deploy` job in rajatarun/aiweave, and a stack that
+#     also owned them would fight that workflow silently.
+#   - It does not touch the existing aiweave.org CloudFront distribution. A
+#     second alias on that distribution would put the game in the request path
+#     of three live deliverables; see HOSTING.md § New distribution or second
+#     alias.
+#   - It does not touch
+#     arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer,
+#     and adds no permission to it. The deploy workflow writes S3 objects and
+#     nothing else, before and after this stack — see HOSTING.md § Does a
+#     deploy need an invalidation.
+#   - It enables no access logging. A CloudFront log line is a timestamped
+#     record of who loaded the game and when, which is exactly the artifact
+#     this project's storage design refuses to keep. Standard logging is
+#     opt-in; it stays off on purpose, and turning it on is a decision rather
+#     than a default.
+#
+# UNDO: delete the Route 53 record (or set ManageDns to the empty string and
+# update), then disable and delete the distribution. Nothing outside this stack
+# changes state. The one thing a delete does NOT recall is HSTS, which lives in
+# browsers — hence the deliberately short default max-age below.
+
+Description: >-
+  A dedicated CloudFront distribution, certificate and DNS record for
+  sounding.aiweave.org, served from a prefix of the existing site bucket.
+
+Parameters:
+  SubdomainName:
+    Type: String
+    Default: sounding.aiweave.org
+    Description: The hostname the game is served from.
+
+  SiteBucketName:
+    Type: String
+    Default: aiweave.org
+    Description: >-
+      The EXISTING site bucket. This stack reads its name to build an origin
+      domain and does nothing else with it — no bucket resource, no policy.
+
+  OriginPrefix:
+    Type: String
+    Default: sounding-app
+    Description: >-
+      The key prefix in that bucket holding the root-based build, with no
+      leading or trailing slash. It cannot be `sounding`: that prefix now holds
+      the bridge page that carries old players' saved progress across. This
+      name appears in exactly two places — here, and the `sounding` job in
+      rajatarun/aiweave's deploy.yaml. They must agree.
+
+  OriginShape:
+    Type: String
+    Default: Website
+    AllowedValues: [Website, RestOac]
+    Description: >-
+      UNVERIFIED FROM HERE, AND THE OWNER MUST CHECK — HOSTING.md § What to
+      check first has the command. `Website` points at the S3 *website*
+      endpoint as a custom origin: it matches the bucket's current, workflow-
+      asserted configuration, needs no bucket policy change, and keeps the
+      bucket's ErrorDocument behaviour. `RestOac` points at the REST endpoint
+      with an Origin Access Control, which is the better shape in general and
+      requires a bucket policy change this stack will not make on a bucket
+      serving four deliverables — and which the deploy workflow's
+      put-bucket-policy step would overwrite on its next run.
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >-
+      An EXISTING us-east-1 ACM certificate covering SubdomainName — a wildcard
+      *.aiweave.org already does. Leave empty to have this stack request one,
+      which requires HostedZoneId to also be set: without it the stack will sit
+      in CREATE_IN_PROGRESS until somebody adds the validation record by hand.
+
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: >-
+      The Route 53 public hosted zone for aiweave.org. Set it and this stack
+      creates the A/AAAA alias records and validates the certificate. Leave it
+      empty to manage DNS by hand. (aiweave.org's nameservers are Route 53 —
+      verified by NS lookup — but which account holds the zone was not
+      verifiable from here.)
+
+  HstsMaxAgeSeconds:
+    Type: Number
+    Default: 300
+    Description: >-
+      Deliberately five minutes to begin with. HSTS is the one thing here a
+      stack delete cannot recall: browsers remember it for whatever max-age
+      they were told. Raise it to 31536000 once the hostname has been serving
+      correctly for a while, not before.
+
+  ContentSecurityPolicy:
+    Type: String
+    Default: ""
+    Description: >-
+      Leave empty on the first apply. A CSP is the strongest available answer
+      to the script-injection risk this whole move is about, and it is also the
+      easiest header to ship broken — the failure is a blank screen. Test a
+      value against the distribution's own d-name before pointing DNS at it.
+      HOSTING.md § A CSP for this origin has one that fits this bundle.
+
+Conditions:
+  UseWebsiteOrigin: !Equals [!Ref OriginShape, Website]
+  UseRestOrigin: !Equals [!Ref OriginShape, RestOac]
+  CreateCertificate: !Equals [!Ref CertificateArn, ""]
+  ManageDns: !Not [!Equals [!Ref HostedZoneId, ""]]
+  SetCsp: !Not [!Equals [!Ref ContentSecurityPolicy, ""]]
+
+Resources:
+  # ----------------------------------------------------------------- the cert
+  # A SEPARATE certificate, not a SAN added to the existing one. ACM cannot add
+  # a name to an issued certificate: doing it that way means requesting a new
+  # certificate and re-pointing the live aiweave.org distribution at it, which
+  # is a change to the thing serving three other deliverables. This one is new,
+  # unreferenced by anything else, and free.
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: CreateCertificate
+    Properties:
+      DomainName: !Ref SubdomainName
+      ValidationMethod: DNS
+      DomainValidationOptions: !If
+        - ManageDns
+        - - DomainName: !Ref SubdomainName
+            HostedZoneId: !Ref HostedZoneId
+        - !Ref AWS::NoValue
+
+  # ------------------------------------------------------ origin access (REST)
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: UseRestOrigin
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # --------------------------------------------------------------- headers
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-security-headers"
+        Comment: Headers for the game's own origin.
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            # Not IncludeSubdomains: this is a leaf name and has no children,
+            # and asserting it here would be a claim about hostnames this stack
+            # does not own. Not Preload, for the same reason plus the fact that
+            # preload is effectively permanent.
+            IncludeSubdomains: false
+            Preload: false
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+          ReferrerPolicy:
+            Override: true
+            # The game asks a progress API for one player's own record. The
+            # referrer says nothing useful to anyone and is worth not sending.
+            ReferrerPolicy: no-referrer
+          ContentSecurityPolicy: !If
+            - SetCsp
+            - Override: true
+              ContentSecurityPolicy: !Ref ContentSecurityPolicy
+            - !Ref AWS::NoValue
+
+  # ---------------------------------------------------------- the distribution
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "SOUNDING — ${SubdomainName}"
+        Aliases: [!Ref SubdomainName]
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_All
+
+        # Required. Without it a request for / reaches the origin as / — on a
+        # REST origin that is an AccessDenied, and with an OriginPath set it is
+        # not a document either way. Note it applies to the ROOT only;
+        # CloudFront never applies it to /some/path/.
+        DefaultRootObject: index.html
+
+        ViewerCertificate:
+          AcmCertificateArn: !If [CreateCertificate, !Ref Certificate, !Ref CertificateArn]
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+
+        Origins:
+          - Id: site-bucket
+            # OriginPath is what lets one bucket back two hostnames. A request
+            # for / on this distribution becomes /<OriginPrefix>/index.html at
+            # the bucket, and nothing on this hostname can address a key
+            # outside that prefix.
+            OriginPath: !Sub "/${OriginPrefix}"
+            DomainName: !If
+              - UseWebsiteOrigin
+              - !Sub "${SiteBucketName}.s3-website-${AWS::Region}.amazonaws.com"
+              - !Sub "${SiteBucketName}.s3.${AWS::Region}.amazonaws.com"
+            # An S3 website endpoint speaks HTTP only — it has no TLS listener,
+            # so this hop is unencrypted inside AWS's network no matter what is
+            # configured here. Saying it out loud rather than letting it be
+            # discovered: the bucket is public-read and the objects are a
+            # public game bundle, so there is nothing confidential on that hop,
+            # and the viewer-to-CloudFront hop, which is the one carrying the
+            # player's session, is HTTPS and forced.
+            CustomOriginConfig: !If
+              - UseWebsiteOrigin
+              - OriginProtocolPolicy: http-only
+                HTTPPort: 80
+              - !Ref AWS::NoValue
+            S3OriginConfig: !If
+              - UseRestOrigin
+              - OriginAccessIdentity: ""
+              - !Ref AWS::NoValue
+            OriginAccessControlId: !If
+              - UseRestOrigin
+              - !GetAtt OriginAccessControl.Id
+              - !Ref AWS::NoValue
+
+        DefaultCacheBehavior:
+          TargetOriginId: site-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          # An S3 website endpoint does not compress. The built bundle is
+          # 390 KB raw and 111 KB gzipped, so this is roughly 280 KB a player
+          # on mobile data does not wait for.
+          Compress: true
+          # Managed-CachingOptimized. Chosen specifically because it RESPECTS
+          # the origin's Cache-Control, which is what makes an invalidation
+          # unnecessary on deploy: the asset filenames are content-hashed and
+          # index.html is uploaded no-store. A policy with a MinTTL above zero
+          # would override that and make every deploy invisible for the TTL.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+
+        # No CustomErrorResponses. SOUNDING has no client-side router, no
+        # history manipulation and no deep links — App.jsx is a useState screen
+        # machine, and the handoff from the old origin travels in the URL
+        # fragment, which never reaches a server. So there is no path that
+        # needs rewriting to index.html, and a 403/404 -> 200 /index.html
+        # catch-all would only turn genuinely missing files into a silently
+        # blank game. Revisit if routing is ever added; HOSTING.md § SPA
+        # routing has the exact block.
+
+        # No Logging block. See the header of this file.
+
+  # --------------------------------------------------------------------- DNS
+  DnsRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: ManageDns
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        # Written out twice rather than with a YAML anchor: this file is read
+        # by people deciding whether to run it, and an anchor is one more thing
+        # to have to trust the parser about.
+        - Name: !Ref SubdomainName
+          Type: A
+          AliasTarget:
+            # CloudFront's fixed hosted zone id — the same value in every
+            # account and region. Alias queries to CloudFront are not charged.
+            HostedZoneId: Z2FDTNDATAQYW2
+            DNSName: !GetAtt Distribution.DomainName
+            EvaluateTargetHealth: false
+        - Name: !Ref SubdomainName
+          Type: AAAA
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2
+            DNSName: !GetAtt Distribution.DomainName
+            EvaluateTargetHealth: false
+
+Outputs:
+  SubdomainUrl:
+    Description: Where the game will be served once DNS resolves.
+    Value: !Sub "https://${SubdomainName}/"
+
+  DistributionId:
+    Description: >-
+      Needed only if the owner decides to invalidate on deploy, which this
+      design says is unnecessary. See HOSTING.md.
+    Value: !Ref Distribution
+
+  DistributionDomainName:
+    Description: >-
+      Test against THIS name before creating any DNS record. It serves the same
+      content with a CloudFront-issued certificate, so the whole hosting change
+      can be proved with nothing pointing at it.
+    Value: !GetAtt Distribution.DomainName
+
+  CertificateInUse:
+    Value: !If [CreateCertificate, !Ref Certificate, !Ref CertificateArn]
+
+  OriginKeyPrefix:
+    Description: The bucket prefix the deploy workflow must publish to.
+    Value: !Sub "s3://${SiteBucketName}/${OriginPrefix}/"
+
+  BucketPolicyStatementIfRestOac:
+    Condition: UseRestOrigin
+    Description: >-
+      This stack will NOT write this. Add it by hand to the bucket policy, and
+      read HOSTING.md first — the deploy workflow's put-bucket-policy step
+      replaces the whole policy on every run and would delete it again.
+    Value: !Sub |
+      {"Sid":"AllowSoundingDistribution","Effect":"Allow",
+       "Principal":{"Service":"cloudfront.amazonaws.com"},
+       "Action":"s3:GetObject",
+       "Resource":"arn:aws:s3:::${SiteBucketName}/${OriginPrefix}/*",
+       "Condition":{"StringEquals":{"AWS:SourceArn":"arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"}}}

@@ -25,19 +25,32 @@ const EMPTY = {
 
 const trialKey = (level, trial) => `${level}:${trial}`;
 
+/**
+ * Coerce anything shaped roughly like a progress document into the real shape.
+ *
+ * Extracted from loadProgress() so that the one other place a progress
+ * document arrives from outside — handoff.js, which receives one from the old
+ * origin during the move to sounding.aiweave.org — cannot drift from the
+ * guarantees this file makes about the shape. Nothing new is stored and no
+ * field is added; this is the same coercion loadProgress always did.
+ */
+export function normalizeProgress(parsed) {
+  if (!parsed || typeof parsed !== 'object') return { ...EMPTY };
+  return {
+    ...EMPTY,
+    ...parsed,
+    next: { ...EMPTY.next, ...(parsed.next || {}) },
+    done: Array.isArray(parsed.done) ? parsed.done : [],
+    revealed: Array.isArray(parsed.revealed) ? parsed.revealed : [],
+  };
+}
+
 /** Reading storage can throw outright in private mode — never let that be fatal. */
 export function loadProgress() {
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return { ...EMPTY };
-    const parsed = JSON.parse(raw);
-    return {
-      ...EMPTY,
-      ...parsed,
-      next: { ...EMPTY.next, ...(parsed.next || {}) },
-      done: Array.isArray(parsed.done) ? parsed.done : [],
-      revealed: Array.isArray(parsed.revealed) ? parsed.revealed : [],
-    };
+    return normalizeProgress(JSON.parse(raw));
   } catch (e) {
     return { ...EMPTY };
   }
