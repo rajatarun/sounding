@@ -680,40 +680,105 @@ try {
   group('Reduced motion, forced colors and the presence marks');
 
   /**
-   * Play level 4 (breathe) from the top of the cave's breath and cross the 25%
-   * presence mark. `Math.random` is pinned so the period is at its longest,
-   * which puts the whole accrual inside one half-cycle: sync climbs at 9/s
-   * while the hold matches, so the mark falls at about 2.8s.
-   *
-   * The reading is taken twice *after* the hold has begun, so the button's own
-   * state change is never what the comparison sees.
+   * The two breathe levels, and how to hold each one until the 25% presence
+   * mark falls. Both are driven for real rather than one being driven and the
+   * other assumed: they are the same code path but not the same level — 9 is
+   * the forge, its Force is Ignition rather than Flow, and a different
+   * `[data-force]` signature runs underneath everything the mark grades.
    */
-  async function acrossTheFirstMark({ reducedMotion, read }) {
+  const BREATHE = {
+    4: {
+      name: 'the breathing cave',
+      force: 'flow',
+      /* Period is pinned to its longest by the seeded `Math.random`, which puts
+         the whole accrual inside one half-cycle: sync climbs at 9/s while the
+         hold matches, so the mark falls at about 2.8s of unbroken holding. */
+      seed: () => { Math.random = () => 0.999; },
+      hold: () => true,
+    },
+    9: {
+      name: 'the forge',
+      force: 'ignition',
+      seed: () => {},
+      /* Heat rises at 22/s held and falls at 12/s released; progress accrues
+         only inside the 60–85 band, at 2.5/s, so the mark is about ten seconds
+         of keeping the fire in its band. Temperature is read back off the orb's
+         own inline scale — `setOrb(temp / 100)` — which is the only place the
+         level publishes it. Held below 80 so the overheat burst never fires. */
+      hold: (strength) => {
+        const temp = ((strength - 0.78) / 0.42) * 100;
+        if (temp > 76) return false;
+        if (temp < 66) return true;
+        return null; // inside the band: leave the hand where it is
+      },
+    },
+  };
+
+  /**
+   * Play a breathe level across its first presence mark and read the screen
+   * either side of it.
+   *
+   * The reading is taken twice *after* the hold has begun, so the control's own
+   * state change is never what the comparison sees, and the second reading
+   * waits out the 1.2s filter transition — sampled early it catches the ladder
+   * at about one percent of its travel, which is indistinguishable from the
+   * rung not being there.
+   */
+  async function acrossTheFirstMark({ level, reducedMotion, read }) {
+    const spec = BREATHE[level];
     const { ctx, page } = await open({
       config: false, reducedMotion,
-      progress: { done: [], next: { level: 4, trial: 1 }, revealed: [], everPlayed: true },
+      progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
     });
-    await page.addInitScript(() => { Math.random = () => 0.999; });
+    await page.addInitScript(spec.seed);
     await page.goto(BASE);
-    await page.locator('button', { hasText: /^Continue — Level 4/ }).first().click();
+    await page.locator('button', { hasText: new RegExp(`^Continue — Level ${level}\\b`) }).first().click();
     await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
     await page.locator('.snd-breathe-btn').waitFor({ timeout: 8000 });
+
     const btn = page.locator('.snd-breathe-btn');
-    await btn.dispatchEvent('mousedown');
-    await page.waitForTimeout(800);
+    let held = false;
+    const hand = async (want) => {
+      if (want === null || want === held) return;
+      await btn.dispatchEvent(want ? 'mousedown' : 'mouseup');
+      held = want;
+    };
+    const sample = () => page.evaluate(() => {
+      const orb = document.querySelector('.snd-orb');
+      const m = orb && /scale\(([\d.]+)\)/.exec(orb.style.transform);
+      return {
+        depth: document.querySelector('.snd-screen-game')?.getAttribute('data-depth') ?? 'no screen',
+        strength: m ? Number(m[1]) : 0,
+      };
+    });
+
+    await hand(true);
+    await page.waitForTimeout(700);
     const before = await page.evaluate(read);
-    await page.waitForTimeout(2600);
+
+    const deadline = Date.now() + 60000;
+    let crossed = false;
+    while (Date.now() < deadline) {
+      const now = await sample();
+      if (now.depth !== '0') { crossed = true; break; }
+      await hand(spec.hold(now.strength));
+      await page.waitForTimeout(150);
+    }
+    await page.waitForTimeout(1600); // the filter ladder's own transition
     const after = await page.evaluate(read);
-    await btn.dispatchEvent('mouseup');
-    /* Read off the page rather than through a locator: when the field is
-       missing entirely — which is the defect this case exists for — a locator
-       stalls for thirty seconds and reports a timeout instead of the finding. */
     const depth = await page.evaluate(
-      () => document.querySelector('.snd-voidfield')?.getAttribute('data-depth') ?? 'no field',
+      () => document.querySelector('.snd-screen-game')?.getAttribute('data-depth') ?? 'no screen',
     );
+    const force = await page.evaluate(
+      () => document.querySelector('.snd-screen-game')?.getAttribute('data-force') ?? null,
+    );
+    await hand(false);
     await ctx.close();
-    return { before, after, depth };
+    return { before, after, depth, force, crossed };
   }
+
+  /** The ladder's channels without the cloth, which is a base64 wall in a message. */
+  const legible = (r) => JSON.stringify({ ...r, cloth: r.cloth ? `${r.cloth.length} bytes` : r.cloth });
 
   /** What the depth ladder can actually change, as the browser resolves it. */
   const DEPTH_CHANNELS = () => {
@@ -731,40 +796,56 @@ try {
     };
   };
 
-  await t('a presence mark is answered by something a reduced-motion player can perceive', async () => {
-    /* `substrate.pulse()` is gated on `bleedMotionAllowed()`, so under reduced
-       motion the dye front — the mark's motion answer — never draws, and the
-       static [data-depth] ladder is all those players get. That ladder lives on
-       `.snd-voidfield`, which levels 4 and 9 did not render at all.
-     *
-       Asserted on *computed style*, not on innerHTML: a `data-depth` attribute
-       with no cascade behind it would satisfy a DOM diff and change nothing on
-       the glass. */
-    const moving = await acrossTheFirstMark({ reducedMotion: 'no-preference', read: DEPTH_CHANNELS });
-    assert(
-      moving.before.cloth !== moving.after.cloth,
-      'the harness never saw a dye front even with motion allowed, so it cannot speak to reduced motion',
-    );
+  for (const level of Object.keys(BREATHE).map(Number)) {
+    const spec = BREATHE[level];
 
-    const still = await acrossTheFirstMark({ reducedMotion: 'reduce', read: DEPTH_CHANNELS });
-    assert(
-      still.before.fieldPresent,
-      'a breathe level renders no feedback field at all, so setPresence, setOrb and setWord run '
-      + 'every frame into nothing and a presence mark has nowhere to be answered',
-    );
-    assert(
-      still.before.cloth === still.after.cloth,
-      'a dye front drew under reduced motion — pulse() is meant to refuse',
-    );
-    const differing = ['wordOpacity', 'wordTracking', 'wrapFilter']
-      .filter((k) => still.before[k] !== still.after[k]);
-    assert(
-      differing.length > 0,
-      `crossing the 25% mark on level 4 changed nothing a reduced-motion player can see: `
-      + `${JSON.stringify(still.before)} -> ${JSON.stringify(still.after)} at data-depth=${still.depth}. `
-      + 'The dye front is correctly suppressed and the [data-depth] ladder is the only answer left.',
-    );
-  });
+    await t(`level ${level} (${spec.name}): a presence mark is answered under reduced motion`, async () => {
+      /* `substrate.pulse()` is gated on `bleedMotionAllowed()`, so under reduced
+         motion the dye front — the mark's motion answer — never draws, and the
+         static [data-depth] ladder is all those players get. That ladder used to
+         live on `.snd-voidfield`, which the breathe levels did not render.
+       *
+         Asserted on *computed style*, not on innerHTML: a `data-depth` attribute
+         with no cascade behind it would satisfy a DOM diff and change nothing on
+         the glass. */
+      const moving = await acrossTheFirstMark({ level, reducedMotion: 'no-preference', read: DEPTH_CHANNELS });
+      assert(moving.crossed, `the 25% mark was never reached on level ${level} with motion allowed`);
+      assert(
+        moving.before.cloth !== moving.after.cloth,
+        'the harness never saw a dye front even with motion allowed, so it cannot speak to reduced motion',
+      );
+
+      const still = await acrossTheFirstMark({ level, reducedMotion: 'reduce', read: DEPTH_CHANNELS });
+      assert(
+        still.before.fieldPresent,
+        `level ${level} renders no feedback field at all, so setPresence, setOrb and setWord run every `
+        + 'frame into nothing and a presence mark has nowhere to be answered',
+      );
+      assert(still.crossed, `the 25% mark was never reached on level ${level} under reduced motion`);
+      assert(still.force === spec.force, `expected the ${spec.force} signature, got ${still.force}`);
+      assert(
+        still.before.cloth === still.after.cloth,
+        'a dye front drew under reduced motion — pulse() is meant to refuse',
+      );
+
+      const differing = ['wordOpacity', 'wordTracking', 'wrapFilter']
+        .filter((k) => still.before[k] !== still.after[k]);
+      assert(
+        differing.length > 0,
+        `crossing the 25% mark on level ${level} changed nothing a reduced-motion player can see: `
+        + `${legible(still.before)} -> ${legible(still.after)} at data-depth=${still.depth}. `
+        + 'The dye front is correctly suppressed and the [data-depth] ladder is the only answer left.',
+      );
+      /* The first mark every player crosses used to be graded by one channel —
+         a 0.12 opacity step on 16px of text — because the filter ladder started
+         at the second. Two channels is what makes it a rung rather than a nudge. */
+      assert(
+        differing.length > 1,
+        `the 25% mark on level ${level} is carried by ${differing.join(', ')} alone `
+        + `(${legible(still.before)} -> ${legible(still.after)})`,
+      );
+    });
+  }
 
   await t('the full-viewport feedback field never eats the breathe control', async () => {
     /* The field is `position: absolute; inset: 0` and is now drawn on breathe
@@ -811,39 +892,98 @@ try {
     }
   });
 
-  await t('the presence reading is not hidden behind the controls', async () => {
+  await t('the presence reading is not hidden behind the controls, and cannot be', async () => {
     /* Presence is the level's one continuous readout and the surface the mark
-       ladder is drawn on. `.snd-presence-wrap` sits at `bottom: 96px` and
-       `.snd-controls-row` at `bottom: knot-8`, both z-index 2 — the row is
-       later in the DOM, so it and its buttons paint over the meter. */
-    const worst = [];
-    for (const [level, vp] of [[1, PHONE], [4, PHONE], [4, SMALL], [1, SMALL]]) {
-      const { ctx, page } = await open({
-        config: false, viewport: vp,
-        progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
-      });
-      await page.locator('button', { hasText: new RegExp(`^Continue — Level ${level}\\b`) }).first().click();
-      await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
-      await page.locator('.snd-presence-wrap').waitFor({ timeout: 8000 });
-      const covered = await page.evaluate(() => {
-        const w = document.querySelector('.snd-presence-wrap').getBoundingClientRect();
-        let px = 0;
-        for (const b of document.querySelectorAll('.snd-controls-row .tantu-btn')) {
-          const r = b.getBoundingClientRect();
-          if (r.bottom <= w.top || r.top >= w.bottom) continue;
-          px += Math.max(0, Math.min(r.right, w.right) - Math.max(r.left, w.left));
+       ladder is drawn on. The bearing readout, the meter and the controls each
+       used to name their own `bottom` — 120px, 96px, knot-8 — which is correct
+       only for the button heights it was measured against, and it was not: a
+       control was painted over 62% of the meter on a steering level and 72% on
+       a breathe level, at every viewport including desktop.
+     *
+       Two assertions, because the second is what makes the first durable. The
+       coverage measurement is the finding restated. The structural one pins
+       *why* it is now zero — three siblings laying themselves out in one
+       column — because a column that overlaps itself is not a thing that
+       happens, whereas three absolute offsets that happen not to collide today
+       is exactly the arrangement that just failed. Re-adding a `position:
+       absolute` to any of the three is one edit and would silently restore the
+       old failure mode; here it fails a test instead. */
+    const seen = [];
+    for (const level of [1, 2, 4, 9]) {
+      for (const vp of [PHONE, SMALL]) {
+        const { ctx, page } = await open({
+          config: false, viewport: vp,
+          progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
+        });
+        await page.locator('button', { hasText: new RegExp(`^Continue — Level ${level}\\b`) }).first().click();
+        await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+        await page.locator('.snd-presence-wrap').waitFor({ timeout: 8000 });
+
+        const m = await page.evaluate(() => {
+          const wrap = document.querySelector('.snd-presence-wrap');
+          const w = wrap.getBoundingClientRect();
+          let px = 0;
+          const by = [];
+          for (const el of document.querySelectorAll('.snd-controls-row .tantu-btn, .snd-heading-cue')) {
+            const r = el.getBoundingClientRect();
+            if (r.bottom <= w.top || r.top >= w.bottom || r.right <= w.left || r.left >= w.right) continue;
+            px += Math.max(0, Math.min(r.right, w.right) - Math.max(r.left, w.left));
+            by.push((el.className || '').split(' ')[0]);
+          }
+          const stack = document.querySelector('.snd-bottom');
+          const rows = stack
+            ? [...stack.children].map((el) => ({
+              cls: (el.className || '').split(' ')[0],
+              position: getComputedStyle(el).position,
+              top: Math.round(el.getBoundingClientRect().top),
+              bottom: Math.round(el.getBoundingClientRect().bottom),
+            }))
+            : null;
+          const doc = document.documentElement;
+          const spilled = [...document.querySelectorAll('.snd-screen-game button')]
+            .filter((b) => {
+              const r = b.getBoundingClientRect();
+              return r.top < 0 || r.bottom > doc.clientHeight || r.left < 0 || r.right > doc.clientWidth;
+            })
+            .map((b) => b.textContent.trim().slice(0, 18));
+          return { coveredPct: Math.round((px / w.width) * 100), by, rows, spilled };
+        });
+        await ctx.close();
+
+        const where = `level ${level} @ ${vp.width}px`;
+        assert(m.rows, `${where}: there is no .snd-bottom column — the three strips are positioning themselves again`);
+
+        /* Structure: one flow, and the meter is in it. */
+        const inFlow = m.rows.filter((r) => r.position === 'static').map((r) => r.cls);
+        assert(
+          inFlow.length === m.rows.length,
+          `${where}: ${m.rows.filter((r) => r.position !== 'static').map((r) => `${r.cls} is ${r.position}`).join(', ')}`
+          + ' — a strip has left the column and is placing itself again',
+        );
+        assert(
+          inFlow.includes('snd-presence-wrap') && inFlow.includes('snd-controls-row'),
+          `${where}: the column holds ${inFlow.join(', ')} — the reading and the controls must both be in it`,
+        );
+        for (let i = 1; i < m.rows.length; i++) {
+          assert(
+            m.rows[i].top >= m.rows[i - 1].bottom,
+            `${where}: ${m.rows[i - 1].cls} and ${m.rows[i].cls} overlap inside the column`,
+          );
         }
-        return Math.round((px / w.width) * 100);
-      });
-      worst.push(`level ${level} @ ${vp.width}px: ${covered}% covered`);
-      await ctx.close();
+
+        /* And the measurement the structure exists to guarantee. */
+        assert(
+          m.coveredPct === 0,
+          `${where}: ${m.coveredPct}% of the presence meter is behind ${m.by.join(', ')}`,
+        );
+        assert(
+          m.spilled.length === 0,
+          `${where}: controls outside the viewport — ${m.spilled.join(', ')}`,
+        );
+        seen.push(`${where}: ${m.rows.map((r) => r.cls.replace('snd-', '')).join(' → ')}`);
+      }
     }
-    assert(
-      worst.every((line) => line.endsWith(': 0% covered')),
-      `a control is drawn over the presence meter — ${worst.join('; ')}. `
-      + 'This predates the breathe-level fix (it is measurable on level 1 too) but that fix is what '
-      + 'gave levels 4 and 9 a meter to occlude, and their single wide control covers the most of it.',
-    );
+    assert(seen.length === 8, `only ${seen.length} of 8 level/viewport pairs were measured`);
   });
 
   await t('.snd-orb never lets an animation overwrite the live alignment reading', async () => {
