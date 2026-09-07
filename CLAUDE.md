@@ -88,6 +88,16 @@ breathe level a reduced-motion Seeker crossed 25/50/75/100% and nothing changed
 anywhere. Don't re-gate the field on the control scheme; gate the steering
 affordance, which is the only part that is actually about steering.
 
+The bearing readout, the presence meter and the controls now share one
+`.snd-bottom` column rather than each naming its own `bottom` offset. The old
+120px/96px/knot-8 arrangement was correct only for the button heights it was
+measured against, and it was not: the meter sat *inside* the controls' band,
+with 62% of it painted over by the turn buttons and 72% by a breathe level's
+single wide one. `data-depth` moved to the screen root for the same reason —
+it grades the meter and the word, and those two do not have to live in the
+same box to be graded together. A column cannot overlap itself; keep them in
+it.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in

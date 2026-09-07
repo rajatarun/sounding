@@ -220,9 +220,17 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const steers = level.control !== 'breathe';
 
   return (
-    <div className="snd-screen snd-screen-game" data-force={force}>
+    // `data-depth` is a fact about the trial, not about the steering surface,
+    // and it lives here so the elements it grades are free to sit wherever the
+    // layout needs them. It used to hang off `.snd-voidfield`, which pinned the
+    // presence meter inside a full-viewport field and left it to fend for
+    // itself against the controls — which it lost, by 62–72%.
+    <div className="snd-screen snd-screen-game" data-force={force} data-depth={depth}>
+      {/* What the player's hands are doing. It read "steering · swipe" on the
+          two breathe levels, which have no steering at all — the same gate
+          this screen kept getting wrong in the other direction. */}
       <div className="snd-control-badge">
-        steering · {gyroActive ? 'phone compass' : 'swipe'}
+        {steers ? `steering · ${gyroActive ? 'phone compass' : 'swipe'}` : 'breath · hold and release'}
       </div>
 
       {/* The field is the level's feedback — presence, the word, the orb — and
@@ -237,7 +245,6 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       <div
         className={`snd-voidfield${steers ? '' : ' snd-voidfield-still'}`}
         ref={steers ? dragzoneRef : undefined}
-        data-depth={depth}
       >
         {steers && (
           <div className="snd-drag-hint">
@@ -250,13 +257,21 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
           className={`snd-orb${orb.notice ? ' snd-orb-notice' : ''}`}
           style={{ transform: `scale(${orbScale})`, opacity: orbOpacity }}
         />
+      </div>
+
+      {/* One stack, so the reading and the controls cannot land on each other.
+          These were three absolutely-positioned strips at 120px, 96px and
+          knot-8, which held only as long as nobody changed a button's height:
+          the meter sat inside the controls' band and every level painted 62%
+          of it over — 72% on a breathe level, whose one wide button covers the
+          most of the channel that level has fewest of. */}
+      <div className="snd-bottom">
+        {/* A bearing readout, and a breathe level has no bearing. */}
+        {steers && <div className="snd-heading-cue">{heading}</div>}
+
         <div className="snd-presence-wrap">
           <TantuMeter value={presence} label="Presence" />
         </div>
-      </div>
-
-      {/* A bearing readout, and a breathe level has no bearing. */}
-      {steers && <div className="snd-heading-cue">{heading}</div>}
 
       {level.control === 'commit' && (
         <div className="snd-controls-row">
@@ -288,6 +303,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
           </TantuButton>
         </div>
       )}
+      </div>
     </div>
   );
 }
