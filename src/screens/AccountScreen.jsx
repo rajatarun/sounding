@@ -32,6 +32,14 @@ import { idToken } from '../account/session.js';
  * person play this game?" for anyone who can type an address.
  */
 
+/**
+ * The code field takes anything between the two lengths Cognito actually
+ * sends — six for a sign-up confirmation, eight for an EMAIL_OTP challenge —
+ * and never advertises which one it expects. See the note at the field.
+ */
+const CODE_MIN = 6;
+const CODE_MAX = 8;
+
 /** Every failure the client can hand back, in the player's words. */
 const MESSAGE = {
   'address-rejected': "That doesn't look like an email address.",
@@ -173,7 +181,17 @@ export function AccountScreen({ onClose, onProgressChanged }) {
               hint={destination ? `Sent to ${destination}` : undefined}
               inputMode="numeric"
               autoComplete="one-time-code"
-              maxLength={6}
+              /* No fixed length, and that is not laziness — it is the same
+                 rule that keeps the two branches indistinguishable.
+                 ConfirmSignUp sends six digits; the EMAIL_OTP challenge sends
+                 eight. A field sized to one of them tells the player which
+                 branch they are on, which is to say whether that address
+                 already had an account — the exact question this flow refuses
+                 to answer. So it accepts either, and the service decides.
+
+                 It was capped at six, which silently truncated an eight-digit
+                 code to its first six and then rejected it as wrong. */
+              maxLength={CODE_MAX}
               value={code}
               error={fieldError || undefined}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
@@ -186,7 +204,7 @@ export function AccountScreen({ onClose, onProgressChanged }) {
             />
             {notice}
             <div className="snd-btnrow">
-              <TantuButton type="submit" variant="secondary" bleed={false} disabled={busy === 'code' || code.length < 6}>
+              <TantuButton type="submit" variant="secondary" bleed={false} disabled={busy === 'code' || code.length < CODE_MIN}>
                 {busy === 'code' ? 'Checking…' : 'Continue'}
               </TantuButton>
               <TantuButton
