@@ -1,0 +1,50 @@
+name: Deploy to aiweave.org/sounding/
+
+# The game is published from the aiweave repository, not this one: that is
+# where the S3 bucket's OIDC role is trusted, and deploying from here would
+# mean widening that role's trust policy to a second repository in order to
+# publish static files that account already publishes three times over.
+#
+# So this workflow builds nothing. It only tells aiweave that main moved, and
+# aiweave's deploy workflow answers with the `sounding` job alone.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  notify:
+    name: Ask aiweave to publish
+    runs-on: ubuntu-latest
+    steps:
+      # GITHUB_TOKEN is scoped to this repository and cannot dispatch to
+      # another one, so this needs a PAT with `contents: write` on
+      # rajatarun/aiweave, stored here as AIWEAVE_DISPATCH_TOKEN. Without it
+      # the step fails loudly rather than quietly not deploying, which is the
+      # failure mode worth avoiding: a green build and a stale site.
+      - name: Send the dispatch
+        env:
+          TOKEN: ${{ secrets.AIWEAVE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::AIWEAVE_DISPATCH_TOKEN is not set — aiweave will not be told to redeploy."
+            echo "Add a PAT with contents:write on rajatarun/aiweave as that secret,"
+            echo "or run the Build and Deploy to S3 workflow there by hand."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/rajatarun/aiweave/dispatches \
+            -d '{"event_type":"sounding-updated","client_payload":{"sha":"${{ github.sha }}"}}')
+          echo "HTTP ${code}"
+          # A dispatch returns 204 with no body. Anything else is a failure the
+          # API describes in the body, so print it rather than guessing.
+          if [ "$code" != "204" ]; then
+            cat /tmp/resp.json || true
+            echo "::error::dispatch failed (HTTP ${code}) — check the token's scope on rajatarun/aiweave"
+            exit 1
+          fi
+          echo "aiweave has been asked to publish ${GITHUB_SHA}"
