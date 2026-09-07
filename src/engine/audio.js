@@ -12,6 +12,13 @@
  * quietness is the mechanic.
  */
 
+/**
+ * Nominal gain of the calibration reference, before the panner and master.
+ * Deliberately the same number the old direct-connected tone used — this change
+ * is about which path it travels, not how loud it is.
+ */
+const CALIBRATION_GAIN = 0.05;
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -50,6 +57,43 @@ export class AudioEngine {
       try { this.ctx.close(); } catch (e) { /* already closed */ }
       this.ctx = null;
     }
+  }
+
+  /**
+   * The calibration reference — the tone the Seeker sets device volume against.
+   *
+   * It travels the game's own chain (voice -> panner -> bus -> master) rather
+   * than connecting straight to the destination the way the calibration screen
+   * used to. A reference on a different signal path calibrates nothing: the
+   * panner's inverse distance model at radius 6 (refDistance 1, rolloff 1) is a
+   * flat 1/6 on every positioned voice, ~-15.6 dB, and master is a further 0.5.
+   * A tone that skips both is ~21.6 dB louder than a game cue of the same
+   * nominal gain, so "just barely audible" was being set against something the
+   * game never plays.
+   *
+   * Placed off-centre because the first sound the game makes should be audibly
+   * spatial — the medium is the product, and this used to be mono.
+   *
+   * What CALIBRATION_GAIN now means, on the shared path: level 1's aligned cue
+   * on trial 1 sits ~20 dB above this reference, and its misaligned floor ~8 dB
+   * below it. That is the intended shape — near-inaudible misaligned, clearly
+   * present aligned — but the absolute number is unvalidated, like everything
+   * in constants.js. It wants a quiet room and a real pair of headphones.
+   *
+   * Note this raises nothing: master.gain and every per-level constant are
+   * untouched. It makes the reference honest, which is the opposite edit.
+   */
+  calibrationTone(bearingDeg = 40) {
+    if (!this.ctx) this.init();
+    this.setListenerYaw(0);
+    // Same brown noise and same bandpass the screen built by hand, so only the
+    // routing changes and the tone's character is preserved exactly.
+    const v = this.voice(bearingDeg, {
+      color: 'brown', filterType: 'bandpass', freq: 500, Q: 0.7, gain: CALIBRATION_GAIN,
+    });
+    return {
+      stop: () => { try { v.src.stop(); } catch (e) { /* already stopped */ } },
+    };
   }
 
   /** Sets how loud this trial's cues are overall. See TRIAL_AUDIO_SCALE. */

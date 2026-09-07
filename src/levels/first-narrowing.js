@@ -146,6 +146,9 @@ export const FIRST_NARROWING = [
     force: FORCES.DRIFT,
     control: 'commit',
     commitLabel: 'I notice this',
+
+    /** The plain verb for `commit` — the first level that is not a hold. */
+    actionLine: 'Turn toward each rhythm you hear, then tap to acknowledge it.',
     tolerance: 20,  // tightened from 28° — wide enough to forgive normal
                     // compass jitter, tight enough that a commit still means
                     // the player located the rhythm, not just faced its
@@ -319,6 +322,9 @@ export const FIRST_NARROWING = [
     force: FORCES.FLOW,
     control: 'breathe',
 
+    /** The plain verb for `breathe` — the first level with no steering at all. */
+    actionLine: 'Hold the button while the wind rises; release as it falls.',
+
     briefing:
       'A door hides in the rock, sealed by nothing but rhythm. The cave itself is ' +
       '<b>breathing</b> — a slow swell and fade in the air.<br><br>There is no ' +
@@ -451,6 +457,8 @@ export const FIRST_NARROWING = [
     id: 6,
     name: 'The Buried Warmth',
     discipline: DISCIPLINES.PLUMB,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.MASS,
     control: 'hold',
     tolerance: 15,
@@ -525,6 +533,8 @@ export const FIRST_NARROWING = [
     id: 7,
     name: "The River's Two Voices",
     discipline: DISCIPLINES.FRAME,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.FLOW,
     control: 'commit',
     commitLabel: 'This is the crossing',
@@ -629,6 +639,8 @@ export const FIRST_NARROWING = [
     id: 8,
     name: 'Between Two Cliffs',
     discipline: DISCIPLINES.FILTER,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.VOID,
     control: 'hold',
     tolerance: 13,
@@ -702,6 +714,8 @@ export const FIRST_NARROWING = [
     id: 9,
     name: 'The Bellows and the Flame',
     discipline: DISCIPLINES.BALANCE,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.IGNITION,
     control: 'breathe',
     holdSeconds: 40,   // cumulative time within the healthy band
@@ -781,6 +795,8 @@ export const FIRST_NARROWING = [
     id: 10,
     name: 'The Turning Wind',
     discipline: DISCIPLINES.TRACE,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.DRIFT,
     control: 'hold',
     tolerance: 18,

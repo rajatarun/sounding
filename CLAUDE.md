@@ -37,6 +37,15 @@ only clearly present at strong alignment. The game asks the player to find a
 silent room and raise their device volume. Do not "fix" this by raising
 `master.gain` or the per-level gain constants.
 
+One real defect did live next to this rule, and it is fixed: the calibration
+reference tone used to connect straight to `destination`, skipping the panner
+and master that every game cue passes through. The panner's inverse distance
+model at radius 6 is a flat 1/6 (~-15.6 dB) and master is a further 0.5, so the
+reference was ~21.6 dB louder than any in-game cue of the same nominal gain —
+the Seeker was calibrating against a sound the game never makes. It now runs
+through `AudioEngine.calibrationTone`, on the game's own chain. Nothing got
+louder; the reference got honest. Keep it that way.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in
@@ -61,12 +70,28 @@ schedule pillar 3 refuses. Don't add a stinger, a sound, or randomness to
 them, and don't make the reward vary — the point is legibility, not surprise.
 
 **Level 1 is easier the very first time anyone plays it.** `state.onboarding`
-is true only for the first trial a Seeker ever starts, and level 1 uses it to
+is true only for the first trial a Seeker ever *enters*, and level 1 uses it to
 seed the draft 28–52° away instead of anywhere in the circle. It changes an
 initial condition, never a mechanic — tolerance, hold and decay are identical
-— and it never happens again. Same for the `actionLine` above the briefing.
-Don't extend either into a general difficulty assist; a hint that returns in
-level 12 is a different thing entirely and undercuts the trained-ear premise.
+— and it never happens again. Don't extend it into a general difficulty assist;
+a hint that returns in level 12 is a different thing entirely and undercuts the
+trained-ear premise.
+
+"Enters" is load-bearing and used not to be true. `everPlayed` was set only by
+`completeTrial`, so the assist retired on first *success* — meaning a Seeker who
+never finished a trial kept it indefinitely, which is precisely the population
+this rule excludes. `enterTrial` in `progress.js` now marks it on entry, which
+is what the flag's own docstring always claimed. The same fix gives the title
+screen a Continue button the moment anyone has begun anything.
+
+**The `actionLine` is scoped to control schemes, not to the first trial ever.**
+It is shown the first time a Seeker meets each of `hold`, `commit` and
+`breathe` — levels 1, 2 and 4 — via `hasPractisedControl`. Tying it to the
+first trial ever, as it was, retired the plain verb exactly one level before
+the controls first changed: level 2 introduces a commit button and level 4
+removes steering altogether, both with no instruction. This is teaching the
+verb, not easing the difficulty, and it must stay that way — it names *what
+the control does*, never where the source is or how to find it.
 
 **Progress is stored, but almost nothing about it is.** `src/engine/progress.js`
 persists which trials are done, where to resume, and which Disciplines have
@@ -202,8 +227,17 @@ grand for pillar 3's register while the rare one stops registering as rare.
 | Completion | every trial | `SikkuKolamLoader` snapping taut, dyed by the level's Force (`GameScreen`) |
 | Discipline reveal | 5× in levels 1–10 | `ChambaRumalCard`'s dye-flip, turned over by the player (`EndScreen`) |
 
-A Discipline is named only once *every* built level practising it is finished
-(`newlyRevealedDiscipline`) — deterministic, never random.
+A Discipline is named when the level carrying `revealsDiscipline: true` is
+finished (`newlyRevealedDiscipline`) — deterministic, never random.
+
+This used to ask whether *every* built level practising a Discipline was
+complete, which made the position of the rarest beat a function of the build
+backlog: FILTER is {2,3,8} and lands at level 8 today, but shipping more FILTER
+levels in the 11–40 block would have moved it later, retroactively, for every
+new Seeker. The flags are placed to reproduce the old reveals exactly (levels
+6, 7, 8, 9, 10) — this was a correctness fix, not a re-pacing. Whether a reveal
+should land earlier is a live design question, and it is now one field per
+level rather than an emergent property of set arithmetic.
 
 ### The five Forces have five different signatures
 

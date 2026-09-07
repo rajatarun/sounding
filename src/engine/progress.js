@@ -52,6 +52,37 @@ export function saveProgress(progress) {
   return progress;
 }
 
+/**
+ * Record that a trial has been *entered*.
+ *
+ * `everPlayed` gates the onboarding scaffolding, and it used to be set only by
+ * completeTrial() — on success. That had two costs. A Seeker who played for
+ * four minutes and closed the tab came back to a screen with no Continue
+ * button and no trace of them; and, because `firstEver` is its inverse, the
+ * level-1 seeding and the action line repeated indefinitely for anyone who
+ * never finished a trial — the one population they were written to exclude.
+ * CLAUDE.md documents that assist as retired permanently after the first
+ * trial, so this is the line that makes the code keep the documented contract.
+ */
+export function enterTrial(progress) {
+  if (progress.everPlayed) return progress;
+  return { ...progress, everPlayed: true };
+}
+
+/**
+ * Has this Seeker already practised a given control scheme?
+ *
+ * Used to decide whether a level's plain-verb `actionLine` still needs to be
+ * shown. The First Narrowing introduces three schemes — hold, commit, breathe
+ * — at levels 1, 2 and 4, and scaffolding that retires after the first trial
+ * ever stops exactly one level before the controls first change.
+ */
+export function hasPractisedControl(progress, levels, control, trialsPerLevel) {
+  return Object.values(levels).some(
+    (lv) => lv.control === control && trialsDone(progress, lv.id, trialsPerLevel) > 0,
+  );
+}
+
 export function isTrialDone(progress, level, trial) {
   return progress.done.includes(trialKey(level, trial));
 }
@@ -95,25 +126,29 @@ export function completeTrial(progress, level, trial, { trialsPerLevel, builtIds
 }
 
 /**
- * Disciplines whose every built level is now complete, and which haven't been
- * named to the Seeker yet.
+ * The Discipline, if any, that the Seeker has just earned the naming of.
  *
- * This is the rare beat — five times across the ten built levels — and it is
- * deterministic, never random. A Discipline is only named once the player has
- * actually finished practicing it, per docs/DESIGN.md's curriculum pillar.
+ * This used to ask whether *every* built level practising a Discipline was
+ * complete. That made the position of the game's rarest beat a function of the
+ * build backlog: FILTER is {2,3,8} today and lands at level 8, but shipping
+ * five more FILTER levels in the 11-40 block would silently move it to level
+ * 35 — retroactively, for every new Seeker. A beat whose timing drifts with
+ * what happens to be built next is not a designed beat.
+ *
+ * So the closing level of each Discipline is now authored, with
+ * `revealsDiscipline: true`. The flags are placed to reproduce exactly the
+ * reveals the old rule produced across the ten built levels (6, 7, 8, 9, 10) —
+ * this is a correctness fix, not a re-pacing. Whether a reveal should land
+ * earlier is a design decision, and it now lives in one editable field per
+ * level instead of emerging from set arithmetic.
+ *
+ * Still deterministic, still never random, still only after genuine practice.
  */
 export function newlyRevealedDiscipline(progress, levels, trialsPerLevel) {
-  const byDiscipline = new Map();
-  Object.values(levels).forEach((lv) => {
-    const key = lv.discipline.name;
-    if (!byDiscipline.has(key)) byDiscipline.set(key, []);
-    byDiscipline.get(key).push(lv);
-  });
-
-  for (const [name, group] of byDiscipline) {
-    if (progress.revealed.includes(name)) continue;
-    const all = group.every((lv) => isLevelComplete(progress, lv.id, trialsPerLevel));
-    if (all) return group[0].discipline;
+  for (const lv of Object.values(levels)) {
+    if (!lv.revealsDiscipline) continue;
+    if (progress.revealed.includes(lv.discipline.name)) continue;
+    if (isLevelComplete(progress, lv.id, trialsPerLevel)) return lv.discipline;
   }
   return null;
 }

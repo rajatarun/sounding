@@ -2,46 +2,36 @@ import { useEffect, useRef, useState } from 'react';
 import { TantuButton, TantuCard, TantuNotice } from '@weaveaijs/tantu';
 
 /**
- * Ear Calibration. The faint reference tone is synthesized the same way the
- * old vanilla build did it — a filtered brown-noise loop just above silence —
- * kept independent of the game's own AudioEngine so calibrating doesn't
- * require starting a level.
+ * Ear Calibration.
+ *
+ * The reference tone now comes from the game's own AudioEngine rather than a
+ * private AudioContext wired straight to the destination. That old arrangement
+ * asked the Seeker to set their volume against a sound the game never makes:
+ * skipping the panner and master put it roughly 21.6 dB above any in-game cue
+ * of the same nominal gain, so a correctly-followed calibration still left the
+ * game far quieter than intended. See AudioEngine.calibrationTone.
+ *
+ * It is also positioned rather than mono now. The first sound this game plays
+ * should demonstrate the thing the game is made of.
  */
-export function CalibrationScreen({ onDone }) {
+export function CalibrationScreen({ audio, onDone }) {
   const [playing, setPlaying] = useState(false);
-  const ctxRef = useRef(null);
+  const toneRef = useRef(null);
 
   function stop() {
-    if (ctxRef.current) {
-      try { ctxRef.current.close(); } catch { /* noop */ }
-      ctxRef.current = null;
+    if (toneRef.current) {
+      toneRef.current.stop();
+      toneRef.current = null;
+      // The engine is shared and every level re-inits it, so leaving a context
+      // open here would be orphaned by the next init() rather than reused.
+      audio.close();
     }
     setPlaying(false);
   }
 
   function toggle() {
-    if (ctxRef.current) { stop(); return; }
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new Ctx();
-    ctxRef.current = ctx;
-
-    const sr = ctx.sampleRate;
-    const buf = ctx.createBuffer(1, sr * 3, sr);
-    const d = buf.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < d.length; i++) {
-      const w = Math.random() * 2 - 1;
-      last = (last + 0.02 * w) / 1.02;
-      d[i] = last * 3.5;
-    }
-
-    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
-    const filt = ctx.createBiquadFilter();
-    filt.type = 'bandpass'; filt.frequency.value = 500; filt.Q.value = 0.7;
-    const g = ctx.createGain(); g.gain.value = 0.05;
-
-    src.connect(filt); filt.connect(g); g.connect(ctx.destination);
-    src.start();
+    if (toneRef.current) { stop(); return; }
+    toneRef.current = audio.calibrationTone();
     setPlaying(true);
   }
 
@@ -59,6 +49,9 @@ export function CalibrationScreen({ onDone }) {
           Find a room as quiet as you can. Put on headphones. Play the faint
           tone below, then <b>raise your device volume slowly</b> until it is
           just barely audible — present, but easy to lose if your mind wanders.
+          <br /><br />
+          It sits a little to one side. If it does not, check that your
+          headphones are the right way round.
           <br /><br />
           That volume is correct for the whole experience. Louder defeats the
           point.

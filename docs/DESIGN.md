@@ -36,7 +36,10 @@ The game recreates that condition rather than simulating it:
 - Master gain sits low, so the player raises their **device** volume rather than
   the game shouting over a noisy room
 - An **Ear Calibration** step plays a faint reference tone and asks the player to
-  raise volume until it's *just* audible — that becomes their level for the session
+  raise volume until it's *just* audible — that becomes their level for the session.
+  The tone runs through the game's own signal chain (panner → bus → master); a
+  reference on any other path calibrates the player against a sound the game
+  never plays, which is what it did before `AudioEngine.calibrationTone`
 
 This makes silence the difficulty curve rather than a workaround for it. It also
 means the game genuinely does not work in a loud room, and that's an accepted
