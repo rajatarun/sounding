@@ -19,11 +19,28 @@
  */
 const CALIBRATION_GAIN = 0.05;
 
+/**
+ * The radius every positioned voice is placed at, and therefore the level
+ * plane the whole mix is referenced to.
+ *
+ * This is load-bearing in a way it did not look. The panner's inverse distance
+ * model gives `refDistance / (refDistance + rolloff * (d - refDistance))`, so
+ * at radius 6 with refDistance 1 every positioned voice is attenuated by a flat
+ * 1/6 — about -15.6 dB — before it reaches the bus. A voice that skips the
+ * panner, or sits at radius 1, does not pay that toll and is therefore 15.6 dB
+ * louder than everything around it, for no reason anyone chose.
+ *
+ * See `nonPositioned` and `referenceTrim`: both exist so that "not positioned"
+ * and "close" are spatial statements rather than accidental level changes.
+ */
+const REFERENCE_RADIUS = 6;
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.master = null;
     this.bus = null;
+    this.nonPositioned = null;
     this.buffers = {};
     this.audioScale = 1;
   }
@@ -48,6 +65,14 @@ export class AudioEngine {
     this.bus.type = 'lowpass';
     this.bus.frequency.value = 13000;
     this.bus.connect(this.master);
+
+    // Where a voice that is deliberately *not* positioned belongs — the cave's
+    // own breath in level 4, the forge bed in level 9. Trimmed to the same
+    // plane a positioned voice arrives on, so choosing not to place a sound in
+    // the room does not silently make it the loudest thing in the mix.
+    this.nonPositioned = this.ctx.createGain();
+    this.nonPositioned.gain.value = this.distanceGain(REFERENCE_RADIUS);
+    this.nonPositioned.connect(this.bus);
 
     this.setListenerYaw(0);
   }
@@ -126,8 +151,54 @@ export class AudioEngine {
     return buf;
   }
 
+  /**
+   * The panner's own inverse-distance gain at a radius — the toll a voice pays
+   * for being out in the room. Mirrors makePanner's distanceModel settings.
+   */
+  distanceGain(radius) {
+    const ref = 1;
+    const rolloff = 1;
+    return ref / (ref + rolloff * (Math.max(radius, ref) - ref));
+  }
+
+  /**
+   * What to multiply a voice by so that placing it nearer than the reference
+   * radius changes where it *is* without changing how loud it is.
+   *
+   * Distance is a spatial parameter in this game, not a volume one — level is
+   * a designed channel and carries alignment. A burst at radius 1 was getting
+   * a free +15.6 dB on top of whatever gain its level asked for, which is how
+   * the loudest single event in the First Narrowing ended up being the one
+   * that fires when the Seeker errs.
+   */
+  referenceTrim(radius) {
+    return this.distanceGain(REFERENCE_RADIUS) / this.distanceGain(radius);
+  }
+
+  /**
+   * Moves an already-placed panner to a new bearing.
+   *
+   * Ramped, never assigned. Writing `positionX.value` every frame steps the
+   * HRTF convolution discontinuously, which on a slow, quiet source is audible
+   * as zipper noise — the worst possible artefact for a game mixed this faint.
+   * The time constant is short enough to track a drift and long enough to take
+   * the click off a gust.
+   */
+  movePanner(panner, deg, radius = REFERENCE_RADIUS, timeConstant = 0.03) {
+    const rad = (deg * Math.PI) / 180;
+    const x = Math.sin(rad) * radius;
+    const z = -Math.cos(rad) * radius;
+    if (panner.positionX) {
+      const now = this.ctx.currentTime;
+      panner.positionX.setTargetAtTime(x, now, timeConstant);
+      panner.positionZ.setTargetAtTime(z, now, timeConstant);
+    } else {
+      panner.setPosition(x, 0, z); // legacy Safari: no AudioParams to ramp
+    }
+  }
+
   /** Places a panner at a compass bearing (0 = ahead, 90 = right). */
-  positionPanner(panner, deg, radius = 6) {
+  positionPanner(panner, deg, radius = REFERENCE_RADIUS) {
     const rad = (deg * Math.PI) / 180;
     const x = Math.sin(rad) * radius;
     const z = -Math.cos(rad) * radius;
@@ -140,7 +211,7 @@ export class AudioEngine {
     }
   }
 
-  makePanner(deg, radius) {
+  makePanner(deg, radius = REFERENCE_RADIUS) {
     const p = this.ctx.createPanner();
     p.panningModel = 'HRTF';
     p.distanceModel = 'inverse';
@@ -207,12 +278,14 @@ export class AudioEngine {
     const gain = this.ctx.createGain();
     gain.gain.value = 0;
 
-    const panner = this.makePanner(o.angleDeg || 0, o.distance || 6);
+    const radius = o.distance || REFERENCE_RADIUS;
+    const panner = this.makePanner(o.angleDeg || 0, radius);
     src.connect(filt); filt.connect(gain); gain.connect(panner); panner.connect(this.bus);
 
     const now = this.ctx.currentTime;
     const attack = o.attack != null ? o.attack : 0.01;
-    const peak = (o.gain != null ? o.gain : 0.5) * this.audioScale;
+    // referenceTrim keeps `distance` a statement about place, not about level.
+    const peak = (o.gain != null ? o.gain : 0.5) * this.audioScale * this.referenceTrim(radius);
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(peak, now + attack);
     gain.gain.linearRampToValueAtTime(0.0001, now + dur);

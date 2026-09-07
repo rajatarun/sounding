@@ -46,6 +46,36 @@ the Seeker was calibrating against a sound the game never makes. It now runs
 through `AudioEngine.calibrationTone`, on the game's own chain. Nothing got
 louder; the reference got honest. Keep it that way.
 
+**Every sound sits on one reference plane, and radius 6 defines it.**
+`makePanner` uses an inverse distance model with `refDistance: 1`, so a voice
+placed at `REFERENCE_RADIUS` (6) is attenuated by a flat 1/6 — about -15.6 dB —
+before it reaches the bus. That toll is invisible until something skips it, and
+three things did: voices connected straight to `audio.bus`, and bursts passing
+`distance: 1`. Each was silently 15.6 dB above everything around it, which is
+how the loudest single event in the First Narrowing came to be the ember burst
+that fires when the Seeker *errs*.
+
+Two seams keep this honest, and new code should use them rather than reach past
+them:
+
+- **`audio.nonPositioned`** — connect here, not to `audio.bus`, for a sound
+  that deliberately has no bearing (level 4's breathing cave, level 9's forge).
+  It is trimmed to the same plane a positioned voice arrives on, so choosing
+  not to place a sound costs no decibels.
+- **`referenceTrim(radius)`**, applied inside `burst()` — makes `distance` a
+  statement about *where a thing is*, never about how loud it is. Level is a
+  designed channel in this game and carries alignment; distance must not
+  quietly write to it.
+
+**A moving source must move its panner.** `movePanner` ramps position rather
+than assigning it — writing `positionX.value` per frame steps the HRTF
+convolution discontinuously, and on a quiet slow source that is audible as
+zipper noise. Level 10 integrated its bearing every frame for the life of the
+project while its panner stayed where `init()` put it, so the level whose whole
+premise is a source that will not hold still had a source that never moved, and
+the binaural image contradicted every other channel. If a level's source
+bearing changes, `movePanner` is not optional.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in
