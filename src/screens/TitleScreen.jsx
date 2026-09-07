@@ -1,79 +1,58 @@
 import {
-  CapillaryBleedSurface, TantuAcousticToggle, TantuButton, TantuCard, TantuTable, TantuTag,
+  CapillaryBleedSurface, TantuAcousticToggle, TantuButton, TantuCard, TantuNaksha,
 } from '@weaveaijs/tantu';
 
-import { NARROWINGS, TRIALS_PER_LEVEL, narrowingFor } from '../engine/constants.js';
-import { isLevelComplete, trialsDone } from '../engine/progress.js';
+import { NARROWINGS, TRIALS_PER_LEVEL } from '../engine/constants.js';
+import { isLevelComplete } from '../engine/progress.js';
 
 /**
- * The arc, shown before it is walked.
+ * The hundred levels as one chart.
  *
- * The four Narrowings compress 4:3:2:1, and the widths here are that ratio —
- * so the shape of the whole hundred levels is legible on the first screen
- * rather than buried in a design document. This answers the honest question a
- * new Seeker has ("how long is this going to ask me to sit still?") without
- * putting a clock on any level, which is a thing the game never does.
+ * This replaced a 100-row table with Begin/Locked tags, which read as an
+ * admin panel rather than a journey. The band widths are the level counts —
+ * 40/30/20/10 — so the 4:3:2:1 compression of the Narrowings is drawn by the
+ * lattice itself rather than described in a caption, and a Seeker can see how
+ * the shape of the thing changes before walking any of it.
+ *
+ * On the three states: `locked` covers the ninety levels that do not exist
+ * yet *and* the built ones ahead of where the Seeker has reached. That second
+ * part is a real behaviour change — the old table let you open any built
+ * level in any order — and it is the honest mapping rather than a workaround:
+ * the component offers locked/active/completed and nothing that means
+ * "available but unvisited", because a fourth state is how a progress chart
+ * starts smuggling in a score. Linear reach also matches the curriculum the
+ * levels are actually written as; the Disciplines build on each other. If
+ * free jumping is wanted back, `stateFor` below is the single place to change.
  */
-const ORDINALS = ['I', 'II', 'III', 'IV'];
-
-function EraArc({ currentLevel }) {
-  const here = narrowingFor(currentLevel);
-  return (
-    <div className="snd-arc">
-      <div className="snd-arc-track" role="list" aria-label="The four Narrowings">
-        {NARROWINGS.map((era) => {
-          const span = era.levels[1] - era.levels[0] + 1;
-          const isHere = here && here.ordinal === era.ordinal;
-          return (
-            <div
-              key={era.ordinal}
-              className="snd-arc-band"
-              role="listitem"
-              style={{ flexGrow: span }}
-              data-here={isHere || undefined}
-              data-fails={era.fails || undefined}
-              /* The bands are proportional, so the narrowest is a quarter the
-                 width of the widest and no name fits in it. The numeral and
-                 the range are what the band shows; the full name goes to
-                 assistive tech and to the legend underneath. */
-              aria-label={`${era.name}, levels ${era.levels[0]} to ${era.levels[1]}, ${era.pacing}${isHere ? ' — you are here' : ''}`}
-            >
-              <span className="snd-arc-ordinal">{ORDINALS[era.ordinal - 1]}</span>
-              <span className="snd-arc-span">{era.levels[0]}–{era.levels[1]}</span>
-            </div>
-          );
-        })}
-      </div>
-      <p className="snd-arc-note">
-        <b>I</b> The First Narrowing · <b>II</b> The Second · <b>III</b> The
-        Third · <b>IV</b> The Fourth. The band widths are the level counts:
-        they shrink as the eras go on, while the sittings get shorter and
-        sharper. Nothing in the first two can be lost.
-      </p>
-    </div>
-  );
+function stateFor(level, id, progress) {
+  if (!level) return 'locked';
+  if (isLevelComplete(progress, id, TRIALS_PER_LEVEL)) return 'completed';
+  if (id === progress.next.level) return 'active';
+  return 'locked';
 }
 
-export function TitleScreen({ levels, totalLevels, progress, onCalibrate, onSelectLevel, onResume }) {
-  const rows = Array.from({ length: totalLevels }, (_, i) => i + 1).map((n) => ({
-    n,
-    level: levels[n] || null,
-  }));
+export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onResume }) {
+  const bands = NARROWINGS.map((era) => {
+    const [from, to] = era.levels;
+    return {
+      id: `narrowing-${era.ordinal}`,
+      label: era.name,
+      // The game's own pacing word, straight from NARROWINGS — never a term
+      // borrowed from the design system. See CLAUDE.md.
+      note: era.pacing,
+      nodes: Array.from({ length: to - from + 1 }, (_, i) => {
+        const id = from + i;
+        const level = levels[id];
+        return {
+          id: `level-${id}`,
+          label: level ? `Level ${id}, ${level.name}` : `Level ${id}`,
+          state: stateFor(level, id, progress),
+        };
+      }),
+    };
+  });
 
-  const resumeLevel = levels[progress.next.level];
-  const canResume = progress.everPlayed && resumeLevel;
-
-  function statusFor(row) {
-    if (!row.level) return { tone: 'neutral', label: 'Locked', solid: false, act: false };
-    if (isLevelComplete(progress, row.n, TRIALS_PER_LEVEL)) {
-      return { tone: 'success', label: 'Complete', solid: false, act: true };
-    }
-    const done = trialsDone(progress, row.n, TRIALS_PER_LEVEL);
-    if (done > 0) {
-      return { tone: 'zari', label: `Trial ${done + 1}`, solid: true, act: true };
-    }
-    return { tone: 'accent', label: 'Begin', solid: true, act: true };
-  }
+  const canResume = progress.everPlayed && levels[progress.next.level];
 
   return (
     <div className="snd-screen snd-screen-title">
@@ -87,9 +66,7 @@ export function TitleScreen({ levels, totalLevels, progress, onCalibrate, onSele
           can be lost — only settled into.
         </p>
         {/* Said once, here, and never again: names the frame in plain English
-            rather than letting the two vocabularies (SOUNDING's invented one,
-            the loom underneath the screen) blend into each other by default.
-            See CLAUDE.md's design-system integration note. */}
+            rather than letting the two vocabularies blend by default. */}
         <p className="snd-subtitle snd-frame-note">What you see is woven. What matters, you'll hear.</p>
 
         <div className="snd-btnrow">
@@ -102,55 +79,22 @@ export function TitleScreen({ levels, totalLevels, progress, onCalibrate, onSele
         </div>
       </CapillaryBleedSurface>
 
-      <TantuCard warpSpan={12} reliefLevel="flat" talimCode="THE-ARC" className="snd-arc-card">
-        <EraArc currentLevel={progress.next.level} />
-      </TantuCard>
-
-      <TantuCard warpSpan={12} reliefLevel="kanthi" talimCode="LEVEL-MAP" className="snd-levelmap-card">
-        <TantuTable
-          caption="Levels of the four Narrowings"
-          rows={rows}
-          rowKey={(row) => row.n}
-          empty="No levels recorded."
-          columns={[
-            { key: 'num', header: '#', width: '3.5em', cell: (row) => String(row.n).padStart(2, '0') },
-            {
-              key: 'name',
-              header: 'Level',
-              cell: (row) => (row.level ? row.level.name : '·'),
-            },
-            {
-              key: 'status',
-              header: 'Status',
-              width: '7em',
-              cell: (row) => {
-                const s = statusFor(row);
-                if (!s.act) return <TantuTag tone={s.tone}>{s.label}</TantuTag>;
-                return (
-                  <TantuTag
-                    tone={s.tone}
-                    solid={s.solid}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onSelectLevel(row.n)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') onSelectLevel(row.n);
-                    }}
-                  >
-                    {s.label}
-                  </TantuTag>
-                );
-              },
-            },
-          ]}
+      <TantuCard warpSpan={12} reliefLevel="kanthi" talimCode="THE-HUNDRED" className="snd-naksha-card">
+        <TantuNaksha
+          label="The hundred levels"
+          columns={10}
+          bands={bands}
+          currentId={`level-${progress.next.level}`}
+          onSelect={(node) => onSelectLevel(Number(node.id.slice('level-'.length)))}
         />
+        <p className="snd-naksha-note">
+          Band widths are the level counts: the eras shrink as they go on, while
+          the sittings get shorter and sharper. Nothing in the first two can be lost.
+        </p>
       </TantuCard>
 
-      {/* Tantu's own chrome sounds — the shuttle and batten, not the game's
-          cues — are muted by default and set once, here. It used to float
-          over every screen, where it covered the level map on this one and
-          the steering readout during a level; a set-once preference doesn't
-          need to follow the Seeker into a dark room. */}
+      {/* Tantu's own chrome sounds — not the game's cues — are muted by
+          default and set once, here. */}
       <div className="snd-toolbar">
         <TantuAcousticToggle defaultMuted />
       </div>

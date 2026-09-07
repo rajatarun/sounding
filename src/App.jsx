@@ -24,7 +24,6 @@ import { BriefingScreen } from './screens/BriefingScreen.jsx';
 import { GameScreen } from './screens/GameScreen.jsx';
 import { EndScreen } from './screens/EndScreen.jsx';
 
-const TOTAL_LEVELS = 100;
 const LEVELS = {};
 FIRST_NARROWING.forEach((lv) => { LEVELS[lv.id] = lv; });
 const BUILT_IDS = FIRST_NARROWING.map((lv) => lv.id).sort((a, b) => a - b);
@@ -106,7 +105,6 @@ export function App() {
         {screen === 'title' && (
           <TitleScreen
             levels={LEVELS}
-            totalLevels={TOTAL_LEVELS}
             progress={progress}
             onCalibrate={() => setScreen('calibration')}
             onSelectLevel={openLevel}

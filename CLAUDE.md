@@ -172,6 +172,25 @@ docs/ROADMAP.md                  phases, native wrapper path, open questions
 docs/LEVELS.md                   the 100-level blueprint
 ```
 
+### The title screen is one chart, not a list
+
+The hundred levels are drawn by `TantuNaksha` (Tantu 0.3.2+): four bands, one
+square per level, ten columns. Every square is the same size, so a band's
+area *is* its level count and the 4:3:2:1 compression is drawn rather than
+described. It replaced a 100-row table that read as an admin panel.
+
+The component offers three states — `locked` / `active` / `completed` — and
+nothing meaning "available but unvisited", deliberately, because a fourth
+state is where a progress chart starts smuggling in a score. So built levels
+ahead of the Seeker's resume point render locked and are not selectable,
+which **is a behaviour change** from the old table: you can no longer open
+level 7 without having reached it. That matches how the levels are actually
+written — a curriculum where the Disciplines build — but if free jumping is
+wanted back, `stateFor` in `TitleScreen.jsx` is the one place to change.
+
+Also note the type roles: `note` on a band takes the game's own pacing word
+from `NARROWINGS`, never a term borrowed from the design system.
+
 ### Two beats, deliberately different sizes
 
 A trial ending and a Discipline being earned are not the same event, and they
