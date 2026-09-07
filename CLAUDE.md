@@ -221,11 +221,34 @@ src/engine/audio.js              HRTF spatialization, runtime synthesis
 src/engine/input.js              compass/gyro steering, swipe fallback
 src/engine/progress.js           resume point, trials done, Disciplines named
 src/engine/constants.js          tuning values + world vocabulary
-src/levels/first-narrowing.js    levels 1–10 (built)
+src/levels/registry.js           the era modules, assembled — the only importer
+src/levels/contract.js           what a level must be, as checks not prose
+src/levels/first-narrowing.js    levels 1–10 (built), of the era's 40
+scripts/check-levels.mjs         `npm run check` — the contract over the game
+scripts/contract.test.mjs        `npm test` — proves the contract catches things
 docs/DESIGN.md                   design pillars, the reasoning behind them
+docs/AUTHORING.md                how to add a level without making it worse
 docs/ROADMAP.md                  phases, native wrapper path, open questions
 docs/LEVELS.md                   the 100-level blueprint
 ```
+
+### Scaling to a hundred
+
+Two commands stand between a new level and the defects the first ten shipped:
+
+```bash
+npm run check   # the level contract; errors block, warnings ask
+npm test        # proves the contract still catches what it claims to
+```
+
+The registry is the only thing that imports an era module, so adding a block
+of levels is one import and one entry in `ERAS`. The contract enforces what
+used to be a comment at the top of a file: level shape, control handlers, the
+era's fail contract, one closing level per Discipline and never one that names
+it early, vocabulary drawn from `constants.js`, and the audio-routing rules
+below. All of it exists because a four-reviewer audit of ten levels found four
+defects that had been visible in the source the whole time — that does not
+scale by a factor of ten, and a check run does.
 
 ### The title screen is one chart, not a list
 
@@ -281,15 +304,21 @@ feedback the level is built on. Motion goes on the pseudo-elements.
 
 ## Adding a level
 
-Levels are plain objects. The interface is documented at the top of
-`src/levels/first-narrowing.js`. A level gets `init`, `update`, an optional
-`onCommit`/`onBreathe`, `cleanup`, and `completionText`. The runtime passes a
-`ctx` with `yaw`, `audio`, `elapsed`, and the UI callbacks
-(`setPresence`, `setOrb`, `setWord`, `flash`, `complete`).
+**Read `docs/AUTHORING.md`.** Short version: add the object to its era module,
+register the module in `src/levels/registry.js`, run `npm run check`, fix every
+error, read every warning, then play it on a phone with headphones.
+
+Build sound with `audio.source()` and `audio.ambient()` rather than raw
+`voice()` nodes. They own the two things levels kept forgetting by hand — the
+trial scaling and moving the panner — which is where every audio defect in this
+project came from. The contract treats a direct `audio.bus` connection and a
+`positionPanner` move as errors.
 
 Match the era's contract. A First or Second Narrowing level must not be able to
-fail. A Third or Fourth Narrowing level may — that's what `fails: true` in
-`NARROWINGS` records.
+fail; `npm run check` now enforces that rather than trusting the comment.
+Note it can only catch the letter: level 9 shipped an ember burst on overheat
+that read as a punishment sting in a no-fail era, and no checker would have
+called that. That one is on the author.
 
 ---
 

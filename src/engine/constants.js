@@ -17,6 +17,29 @@ export const TRIALS_PER_LEVEL = 3;
 export const TRIAL_AUDIO_SCALE = [1.0, 0.72, 0.50];
 
 /**
+ * Cumulative-presence marks the loom answers with a dye front.
+ *
+ * These live here rather than in GameScreen because they are a *curriculum*
+ * constant, not a chrome one: a level's `depthAt` thresholds have to be read
+ * against them. A reveal landing a few points after a mark is perceived as
+ * having been caused by it, which quietly turns the mark into the stinger
+ * CLAUDE.md forbids. `npm run check` warns when the two collide.
+ *
+ * Fixed and deterministic on purpose — see CLAUDE.md. A predictable tick is a
+ * progress bar with marks on it; an unpredictable one is a reward schedule.
+ */
+export const PRESENCE_MARKS = [25, 50, 75, 100];
+
+/** How far presence must fall back before a mark can answer again. */
+export const MARK_REARM = 12;
+
+/**
+ * How close a `depthAt` threshold may sit above a presence mark before the
+ * two read as one event. Used by the level contract check.
+ */
+export const MARK_CLEARANCE = 8;
+
+/**
  * THE NARROWINGS — the four eras.
  *
  * Level counts follow a 4:3:2:1 compression. This is a production decision as
