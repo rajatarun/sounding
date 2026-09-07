@@ -589,3 +589,10 @@ body.snd-noscroll {
 }
 /* Last on the title screen, and quiet. */
 .snd-account-entry { margin-top: var(--tantu-knot-4); }
+.snd-account-note {
+  margin: var(--tantu-knot-1) 0 0;
+  font-family: var(--tantu-font-meta);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  opacity: 0.62;
+}
