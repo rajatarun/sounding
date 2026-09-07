@@ -31,7 +31,7 @@ function stateFor(level, id, progress) {
   return 'locked';
 }
 
-export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onResume }) {
+export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onResume, onAccount }) {
   const bands = NARROWINGS.map((era) => {
     const [from, to] = era.levels;
     return {
@@ -89,6 +89,20 @@ export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onRe
           )}
           <TantuButton variant="secondary" onClick={onCalibrate}>Calibrate Your Ears</TantuButton>
         </div>
+
+        {/* Only when this build has accounts at all — see App's accountsOffered.
+            Deliberately quiet and deliberately last: an account carries a
+            resume point to another device and does nothing else, so it has no
+            business competing with the way into the game. The plain words are
+            the point; this is the one screen that is plumbing rather than
+            world, and it should not pretend otherwise. */}
+        {onAccount && (
+          <div className="snd-account-entry">
+            <TantuButton variant="ghost" bleed={false} onClick={onAccount}>
+              Carry your progress to another device
+            </TantuButton>
+          </div>
+        )}
       </CapillaryBleedSurface>
 
       <TantuCard warpSpan={12} reliefLevel="kanthi" talimCode="THE-HUNDRED" className="snd-naksha-card">

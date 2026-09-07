@@ -5,7 +5,7 @@
  * Dressed in Tantu — the loom substrate, the selvedge shuttle, cards, buttons,
  * meters — rather than hand-rolled CSS.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TantuLoom } from '@weaveaijs/tantu';
 
 import { AudioEngine } from './engine/audio.js';
@@ -17,8 +17,13 @@ import {
   newlyRevealedDiscipline, markRevealed, enterTrial, hasPractisedControl,
 } from './engine/progress.js';
 
+import { accountConfig } from './account/config.js';
+import { restore } from './account/session.js';
+import { pull, push } from './account/mirror.js';
+
 import { LoomSubstrate } from './components/LoomSubstrate.jsx';
 import { TitleScreen } from './screens/TitleScreen.jsx';
+import { AccountScreen } from './screens/AccountScreen.jsx';
 import { CalibrationScreen } from './screens/CalibrationScreen.jsx';
 import { BriefingScreen } from './screens/BriefingScreen.jsx';
 import { GameScreen } from './screens/GameScreen.jsx';
@@ -35,6 +40,10 @@ export function App() {
   // ever entered. Snapshotted at entry rather than derived, because entering
   // is now what retires the flag — see beginLevel.
   const [runFirstEver, setRunFirstEver] = useState(false);
+  // Null until we know whether this build has accounts at all. The title
+  // screen offers nothing until it does, so a build with no auth-config.json
+  // never shows a control that cannot work.
+  const [accountsOffered, setAccountsOffered] = useState(false);
 
   // The engine instances live for the app's whole life — recreating an
   // AudioContext per level would just add startup latency for no reason.
@@ -48,6 +57,25 @@ export function App() {
   // only on the first trial ever — the schemes change at levels 1, 2 and 4.
   const showActionLine = Boolean(level)
     && !hasPractisedControl(progress, LEVELS, level.control, TRIALS_PER_LEVEL);
+
+  // After first paint, never blocking it. One small document, and its absence
+  // is the off switch — see account/config.js. A stored refresh token is then
+  // exchanged quietly: a Seeker who signed in last week comes back signed in,
+  // and one whose token has expired simply comes back signed out, which is a
+  // resting state rather than an error worth a screen.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!(await accountConfig())) return;
+      if (!live) return;
+      setAccountsOffered(true);
+      const session = await restore();
+      if (!live || !session.ok) return;
+      const merged = await pull();
+      if (live && merged) setProgress(merged);
+    })();
+    return () => { live = false; };
+  }, []);
 
   function persist(next) {
     setProgress(next);
@@ -92,6 +120,11 @@ export function App() {
     const discipline = newlyRevealedDiscipline(next, LEVELS, TRIALS_PER_LEVEL);
     if (discipline) next = markRevealed(next, discipline.name);
     persist(next);
+    // Not awaited, and it draws nothing whether it works or not. A trial
+    // boundary is the quietest moment in this game and a spinner there is the
+    // stinger CLAUDE.md refuses; a failure is surfaced later, on the account
+    // screen, as a resting fact.
+    push(next);
 
     setEndInfo({ ...info, discipline });
     setScreen('end');
@@ -117,6 +150,17 @@ export function App() {
             onCalibrate={() => setScreen('calibration')}
             onSelectLevel={openLevel}
             onResume={resumeSession}
+            onAccount={accountsOffered ? () => setScreen('account') : null}
+          />
+        )}
+
+        {screen === 'account' && (
+          <AccountScreen
+            onClose={() => setScreen('title')}
+            onProgressChanged={async () => {
+              const merged = await pull();
+              if (merged) setProgress(merged);
+            }}
           />
         )}
 

@@ -571,3 +571,21 @@ body.snd-noscroll {
   [data-force="flow"] .snd-orb::before { transform: scale(1); }
   [data-force="drift"] .snd-orb::before { transform: none; }
 }
+
+/* --- Account ------------------------------------------------------
+   The one screen in this game that is plumbing rather than world. It
+   deliberately carries no [data-force] signature, no orb and no dye: an
+   identity provider is not in the cave, and dressing it as though it were is
+   both a lie about what is happening and, on a failed sign-in, a reward for
+   failing. Reading as a separate system is the correct outcome here. */
+.snd-account .tantu-card { max-width: 32rem; }
+.snd-account form { display: flex; flex-direction: column; gap: var(--tantu-knot-4); }
+.snd-account .snd-btnrow { margin-top: 0; }
+.snd-account-fineprint {
+  font-family: var(--tantu-font-meta);
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.72;
+}
+/* Last on the title screen, and quiet. */
+.snd-account-entry { margin-top: var(--tantu-knot-4); }
