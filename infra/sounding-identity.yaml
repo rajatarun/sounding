@@ -25,19 +25,24 @@ AWSTemplateFormatVersion: "2010-09-09"
 # deletion protections named below. Nothing outside the stack changes state.
 
 Description: >-
-  SOUNDING player accounts: a passwordless Cognito user pool, and a
+  SOUNDING player accounts: a Cognito user pool that is passwordless to the
+  player, and a
   three-route progress store whose records cannot carry a date.
 
 Parameters:
   AllowedOrigin:
     Type: String
-    Default: https://aiweave.org
+    Default: https://sounding.aiweave.org
     Description: >-
       The exact origin the game is served from, for the API's CORS policy. It
-      must be https. UNVERIFIED FROM HERE: the deploy workflow publishes to an
-      S3 *website* endpoint, which serves plain HTTP; whether aiweave.org has
-      TLS in front of it could not be checked from this environment and is a
-      blocking precondition. See README.md § The TLS precondition.
+      must be https, and it is a single origin rather than a list on purpose:
+      the whole reason the game has its own hostname is that browser storage —
+      including any token this API's answers are kept beside — is scoped to the
+      origin. Allowing aiweave.org here would hand that back to Storybook.
+
+      The TLS precondition this parameter used to warn about is met:
+      aiweave.org and its subdomains are served through CloudFront, and
+      sounding.aiweave.org is a distribution of its own. See HOSTING.md.
 
   SesSourceArn:
     Type: String
@@ -109,11 +114,28 @@ Resources:
       # this game needs one for.
 
       Policies:
-        # Passwordless. EMAIL_OTP is the only first factor the pool will accept,
-        # so there is no password to choose, forget, reset, reuse or leak, and
-        # no password-policy state for the UI to draw.
+        # Passwordless to the player, which is not the same as a pool with no
+        # password factor — Cognito will not accept one. Declaring
+        # [EMAIL_OTP] alone is rejected outright at create time:
+        #
+        #   Invalid request provided: PASSWORD should be configured as one of
+        #   the allowed first auth factors.
+        #
+        # So PASSWORD is listed because the service requires it to be, and the
+        # design holds anyway: SignUp sends a random 32-character password that
+        # is generated in the browser, used once, and never stored, shown or
+        # transmitted anywhere else. Nobody — including this project — knows any
+        # player's password, so EMAIL_OTP is the only factor that can actually
+        # authenticate, and the UI has no password field, no strength meter, no
+        # policy text and no reset flow.
+        #
+        # Worth being straight about the residue: a ForgotPassword flow still
+        # exists on the pool. It proves possession of the same email address
+        # EMAIL_OTP proves, so it grants nothing a code does not, but it is a
+        # surface that would not exist if Cognito allowed the pool this design
+        # actually wants.
         SignInPolicy:
-          AllowedFirstAuthFactors: [EMAIL_OTP]
+          AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]
 
       MfaConfiguration: "OFF"
       AccountRecoverySetting:

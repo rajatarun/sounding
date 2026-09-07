@@ -1,15 +1,24 @@
 # Applying the stack
 
-**Nothing in this directory has been applied.** It was written without AWS
-credentials, against an account that already serves three live deliverables.
-Every command below is for a human with the account owner's own credentials to
-run, in order, reading the output.
+**This stack is applied by GitHub Actions, not by the commands below.** The
+`sounding-identity` job in `rajatarun/aiweave/.github/workflows/deploy.yaml`
+deploys it with `CAPABILITY_IAM`, using the same OIDC role every other
+deliverable on this account deploys with, gated on the repository variable
+`SOUNDING_AUTH`. It then publishes the pool id, client id and API url as
+`auth-config.json` beside the game, and checks two things a template cannot:
+that the API refuses an unauthenticated read, and that its preflight names the
+game's origin.
 
-> **Read [HOSTING.md](HOSTING.md) first.** The game is moving to its own
-> hostname, and the order matters: the bridge page that carries old players'
-> saved progress must not be published until `sounding.aiweave.org` actually
-> resolves, or it sends people to an address that does not answer. This file
-> covers the identity stack only.
+The commands below are the by-hand equivalent, kept for work that happens
+outside a deploy — reading a stack's outputs, deleting it, chasing a failure.
+
+> **State of play.** `sounding.aiweave.org` is live: the hosting stack is
+> applied and the hostname resolves to its own CloudFront distribution. Player
+> accounts are **not** provisioned — `SOUNDING_AUTH` is unset, so no Cognito
+> pool, no table and no API exist yet, and the game offers no sign-in.
+>
+> Read [HOSTING.md](HOSTING.md) for the hostname, its two cutover switches, and
+> what is still outstanding there. This file covers identity only.
 
 ---
 

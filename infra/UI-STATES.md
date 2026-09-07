@@ -30,8 +30,15 @@ API. **It is never surfaced.** Two reasons, and both matter:
 - It also removes an entire branch of the UI. There is no account-vs-sign-in
   toggle, no "already have an account?" link, no second form.
 
-**There are no passwords anywhere in this flow.** The pool is configured with
-`EMAIL_OTP` as the only accepted first factor, so there is no password field,
+**There are no passwords anywhere in this flow**, which is a statement about
+the player rather than about the pool. Cognito will not accept a pool with
+`EMAIL_OTP` as its only first factor — it rejects the stack with *"PASSWORD
+should be configured as one of the allowed first auth factors"* — so `PASSWORD`
+is listed because the service demands it, and `SignUp` sends a random
+32-character password generated in the browser and discarded in the same
+expression. Nobody knows it, so nothing can authenticate with it, and
+`EMAIL_OTP` remains the only factor that works. From the player's side nothing
+changes: there is no password field,
 no strength meter, no policy text, no confirmation field, no "forgot password",
 and no reset flow. If a state below looks like it is missing, that is why.
 
@@ -97,7 +104,8 @@ went wrong" is how a player ends up retyping a correct address six times.
 Two ids exist in the client and should **not** get a UI state:
 
 - `already-registered` — swallowed by the single-field flow above.
-- `password-rejected` — unreachable on a passwordless pool. It is mapped
+- `password-rejected` — unreachable in practice, since no player has a
+  password anyone could type. It is mapped
   defensively so that if a password factor is ever added, the failure has
   somewhere to land instead of falling into `unknown`.
 
