@@ -14,7 +14,7 @@ import { TRIALS_PER_LEVEL } from './engine/constants.js';
 import { FIRST_NARROWING } from './levels/first-narrowing.js';
 import {
   loadProgress, saveProgress, completeTrial, nextTrialFor,
-  newlyRevealedDiscipline, markRevealed,
+  newlyRevealedDiscipline, markRevealed, enterTrial, hasPractisedControl,
 } from './engine/progress.js';
 
 import { LoomSubstrate } from './components/LoomSubstrate.jsx';
@@ -35,6 +35,10 @@ export function App() {
   const [trial, setTrial] = useState(progress.next.trial);
   const [gyroActive, setGyroActive] = useState(false);
   const [endInfo, setEndInfo] = useState(null);
+  // Whether the trial currently being played is the first one this Seeker has
+  // ever entered. Snapshotted at entry rather than derived, because entering
+  // is now what retires the flag — see beginLevel.
+  const [runFirstEver, setRunFirstEver] = useState(false);
 
   // The engine instances live for the app's whole life — recreating an
   // AudioContext per level would just add startup latency for no reason.
@@ -44,9 +48,10 @@ export function App() {
   if (!steeringRef.current) steeringRef.current = new Steering();
 
   const level = LEVELS[currentLevel];
-  // The very first trial anyone ever plays gets onboarding scaffolding that
-  // never appears again. See first-narrowing.js's level 1.
-  const firstEver = !progress.everPlayed;
+  // The plain verb is shown the first time each control scheme is met, not
+  // only on the first trial ever — the schemes change at levels 1, 2 and 4.
+  const showActionLine = Boolean(level)
+    && !hasPractisedControl(progress, LEVELS, level.control, TRIALS_PER_LEVEL);
 
   function persist(next) {
     setProgress(next);
@@ -69,6 +74,13 @@ export function App() {
 
   function beginLevel({ gyro }) {
     setGyroActive(gyro);
+    // Entering a trial is what retires the onboarding scaffolding, so take the
+    // reading before marking it. `everPlayed` used to be set only on success,
+    // which meant a Seeker who never finished one kept the level-1 seeding
+    // indefinitely — CLAUDE.md documents that assist as never happening again.
+    // It also means the title screen offers Continue the moment anyone begins.
+    setRunFirstEver(!progress.everPlayed);
+    persist(enterTrial(progress));
     setScreen('game');
   }
 
@@ -113,11 +125,16 @@ export function App() {
         )}
 
         {screen === 'calibration' && (
-          <CalibrationScreen onDone={() => setScreen('title')} />
+          <CalibrationScreen audio={audioRef.current} onDone={() => setScreen('title')} />
         )}
 
         {screen === 'briefing' && level && (
-          <BriefingScreen level={level} trial={trial} firstEver={firstEver} onBegin={beginLevel} />
+          <BriefingScreen
+            level={level}
+            trial={trial}
+            showActionLine={showActionLine}
+            onBegin={beginLevel}
+          />
         )}
 
         {screen === 'game' && level && (
@@ -125,7 +142,7 @@ export function App() {
             key={`${currentLevel}-${trial}`}
             level={level}
             trial={trial}
-            firstEver={firstEver}
+            firstEver={runFirstEver}
             gyroActive={gyroActive}
             audio={audioRef.current}
             steering={steeringRef.current}

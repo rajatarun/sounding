@@ -52,7 +52,21 @@ export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onRe
     };
   });
 
-  const canResume = progress.everPlayed && levels[progress.next.level];
+  /*
+   * The one primary action, and it is always present.
+   *
+   * This used to render only for a returning Seeker (`progress.everPlayed`),
+   * which left a genuine first run with no primary button at all: the only
+   * button on the screen was the secondary "Calibrate Your Ears", and the way
+   * into the game was discovering that exactly one square in a hundred — in a
+   * chart where ninety-nine render locked — was tappable. The 100-row table
+   * this chart replaced carried a solid accent "Begin" tag on level 1's row;
+   * that affordance went out with the table rather than by decision. Restored.
+   */
+  const startLevel = levels[progress.next.level];
+  const startLabel = progress.everPlayed
+    ? `Continue — Level ${progress.next.level}, Trial ${progress.next.trial}`
+    : `Begin — Level ${progress.next.level}, ${startLevel ? startLevel.name : ''}`;
 
   return (
     <div className="snd-screen snd-screen-title">
@@ -70,10 +84,8 @@ export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onRe
         <p className="snd-subtitle snd-frame-note">What you see is woven. What matters, you'll hear.</p>
 
         <div className="snd-btnrow">
-          {canResume && (
-            <TantuButton variant="primary" onClick={onResume}>
-              Continue — Level {progress.next.level}, Trial {progress.next.trial}
-            </TantuButton>
+          {startLevel && (
+            <TantuButton variant="primary" onClick={onResume}>{startLabel}</TantuButton>
           )}
           <TantuButton variant="secondary" onClick={onCalibrate}>Calibrate Your Ears</TantuButton>
         </div>

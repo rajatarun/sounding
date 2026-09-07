@@ -18,7 +18,7 @@ const TRIAL_VOICE = [
   'Quieter still — the deepest listening of the three.',
 ];
 
-export function BriefingScreen({ level, trial, firstEver, onBegin }) {
+export function BriefingScreen({ level, trial, showActionLine, onBegin }) {
   const [useGyro, setUseGyro] = useState(true);
   const [starting, setStarting] = useState(false);
 
@@ -46,9 +46,15 @@ export function BriefingScreen({ level, trial, firstEver, onBegin }) {
           Level {level.id} · {level.name} — Trial {trial} of {TRIALS_PER_LEVEL}
         </div>
 
-        {/* The plain instruction first, the atmosphere second. A first-time
-            Seeker should never have to infer the verb from the prose. */}
-        {level.actionLine && firstEver && (
+        {/* The plain instruction first, the atmosphere second. A Seeker should
+            never have to infer the verb from the prose.
+
+            Shown on the first encounter of each *control scheme*, not only on
+            the first trial ever. The First Narrowing introduces three — hold,
+            commit, breathe — at levels 1, 2 and 4, so scaffolding tied to the
+            first trial ever retired exactly one level before the controls
+            first changed. See hasPractisedControl in progress.js. */}
+        {level.actionLine && showActionLine && (
           <p className="snd-action-line">{level.actionLine}</p>
         )}
 

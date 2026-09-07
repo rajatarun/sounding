@@ -146,6 +146,9 @@ export const FIRST_NARROWING = [
     force: FORCES.DRIFT,
     control: 'commit',
     commitLabel: 'I notice this',
+
+    /** The plain verb for `commit` — the first level that is not a hold. */
+    actionLine: 'Turn toward each rhythm you hear, then tap to acknowledge it.',
     tolerance: 20,  // tightened from 28° — wide enough to forgive normal
                     // compass jitter, tight enough that a commit still means
                     // the player located the rhythm, not just faced its
@@ -319,6 +322,9 @@ export const FIRST_NARROWING = [
     force: FORCES.FLOW,
     control: 'breathe',
 
+    /** The plain verb for `breathe` — the first level with no steering at all. */
+    actionLine: 'Hold the button while the wind rises; release as it falls.',
+
     briefing:
       'A door hides in the rock, sealed by nothing but rhythm. The cave itself is ' +
       '<b>breathing</b> — a slow swell and fade in the air.<br><br>There is no ' +
@@ -342,13 +348,16 @@ export const FIRST_NARROWING = [
 
       osc.connect(oscGain); oscGain.connect(gain);
       noise.connect(filt); filt.connect(gain);
-      gain.connect(audio.bus);
+      // The cave's breath is the room, so it is rightly not placed at a
+      // bearing — but connecting past the panner also skipped its distance
+      // attenuation, making "unpositioned" mean "+15.6 dB" by accident.
+      gain.connect(audio.nonPositioned);
       osc.start(); noise.start();
 
       // Resonance tone: rises only as the player syncs. The reward is harmonic.
       const res = c.createOscillator(); res.type = 'sine'; res.frequency.value = 220;
       const resGain = c.createGain(); resGain.gain.value = 0;
-      res.connect(resGain); resGain.connect(audio.bus); res.start();
+      res.connect(resGain); resGain.connect(audio.nonPositioned); res.start();
 
       s.nodes = { osc, noise, filt, gain, res, resGain };
     },
@@ -365,7 +374,12 @@ export const FIRST_NARROWING = [
         (0.07 + Math.abs(target) * 0.13) * ctx.audio.audioScale, now, 0.15,
       );
       s.nodes.filt.frequency.setTargetAtTime(280 + Math.abs(target) * 450, now, 0.15);
-      s.nodes.resGain.gain.setTargetAtTime((s.sync / 100) * 0.2, now, 0.25);
+      // Scales with the trial like every other voice. It did not, and it is the
+      // one sound the Seeker earns — so trial 3 asked for a deeper kind of
+      // listening while the reward for it arrived at full strength regardless.
+      s.nodes.resGain.gain.setTargetAtTime(
+        (s.sync / 100) * 0.2 * ctx.audio.audioScale, now, 0.25,
+      );
 
       ctx.setPresence(s.sync);
       ctx.setOrb(s.sync / 100);
@@ -451,6 +465,8 @@ export const FIRST_NARROWING = [
     id: 6,
     name: 'The Buried Warmth',
     discipline: DISCIPLINES.PLUMB,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.MASS,
     control: 'hold',
     tolerance: 15,
@@ -525,6 +541,8 @@ export const FIRST_NARROWING = [
     id: 7,
     name: "The River's Two Voices",
     discipline: DISCIPLINES.FRAME,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.FLOW,
     control: 'commit',
     commitLabel: 'This is the crossing',
@@ -629,6 +647,8 @@ export const FIRST_NARROWING = [
     id: 8,
     name: 'Between Two Cliffs',
     discipline: DISCIPLINES.FILTER,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.VOID,
     control: 'hold',
     tolerance: 13,
@@ -702,6 +722,8 @@ export const FIRST_NARROWING = [
     id: 9,
     name: 'The Bellows and the Flame',
     discipline: DISCIPLINES.BALANCE,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.IGNITION,
     control: 'breathe',
     holdSeconds: 40,   // cumulative time within the healthy band
@@ -724,7 +746,9 @@ export const FIRST_NARROWING = [
       const noise = c.createBufferSource(); noise.buffer = audio.buffers.brown; noise.loop = true;
       const filt = c.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = 300; filt.Q.value = 0.8;
       const gain = c.createGain(); gain.gain.value = 0.08;
-      noise.connect(filt); filt.connect(gain); gain.connect(audio.bus);
+      // Unpositioned for the same reason as level 4's breath, and on the same
+      // reference plane so that choice costs no decibels.
+      noise.connect(filt); filt.connect(gain); gain.connect(audio.nonPositioned);
       noise.start();
       s.nodes = { noise, filt, gain };
     },
@@ -781,6 +805,8 @@ export const FIRST_NARROWING = [
     id: 10,
     name: 'The Turning Wind',
     discipline: DISCIPLINES.TRACE,
+    // Closes this Discipline: see newlyRevealedDiscipline in progress.js.
+    revealsDiscipline: true,
     force: FORCES.DRIFT,
     control: 'hold',
     tolerance: 18,
@@ -815,6 +841,15 @@ export const FIRST_NARROWING = [
         s.threatAngle = (s.threatAngle + (Math.random() * 2 - 1) * 70 + 360) % 360;
         s.nextGustAt = t + 5 + Math.random() * 6;
       }
+
+      // The sound goes where the wind went. This level integrates threatAngle
+      // every frame and gusts it by up to +/-70 degrees, but the panner was
+      // placed once in init() and never moved again — so in the one level whose
+      // whole premise is that the source will not hold still, the source did
+      // not move. Gain and the on-screen word tracked the new bearing while the
+      // binaural image stayed nailed to wherever the wind started, which is a
+      // confidently false spatial cue in the level that closes The Trace.
+      ctx.audio.movePanner(s.voice.panner, s.threatAngle);
 
       const align = alignment(ctx.yaw, s.threatAngle);
       const now = ctx.audio.ctx.currentTime;

@@ -37,6 +37,45 @@ only clearly present at strong alignment. The game asks the player to find a
 silent room and raise their device volume. Do not "fix" this by raising
 `master.gain` or the per-level gain constants.
 
+One real defect did live next to this rule, and it is fixed: the calibration
+reference tone used to connect straight to `destination`, skipping the panner
+and master that every game cue passes through. The panner's inverse distance
+model at radius 6 is a flat 1/6 (~-15.6 dB) and master is a further 0.5, so the
+reference was ~21.6 dB louder than any in-game cue of the same nominal gain —
+the Seeker was calibrating against a sound the game never makes. It now runs
+through `AudioEngine.calibrationTone`, on the game's own chain. Nothing got
+louder; the reference got honest. Keep it that way.
+
+**Every sound sits on one reference plane, and radius 6 defines it.**
+`makePanner` uses an inverse distance model with `refDistance: 1`, so a voice
+placed at `REFERENCE_RADIUS` (6) is attenuated by a flat 1/6 — about -15.6 dB —
+before it reaches the bus. That toll is invisible until something skips it, and
+three things did: voices connected straight to `audio.bus`, and bursts passing
+`distance: 1`. Each was silently 15.6 dB above everything around it, which is
+how the loudest single event in the First Narrowing came to be the ember burst
+that fires when the Seeker *errs*.
+
+Two seams keep this honest, and new code should use them rather than reach past
+them:
+
+- **`audio.nonPositioned`** — connect here, not to `audio.bus`, for a sound
+  that deliberately has no bearing (level 4's breathing cave, level 9's forge).
+  It is trimmed to the same plane a positioned voice arrives on, so choosing
+  not to place a sound costs no decibels.
+- **`referenceTrim(radius)`**, applied inside `burst()` — makes `distance` a
+  statement about *where a thing is*, never about how loud it is. Level is a
+  designed channel in this game and carries alignment; distance must not
+  quietly write to it.
+
+**A moving source must move its panner.** `movePanner` ramps position rather
+than assigning it — writing `positionX.value` per frame steps the HRTF
+convolution discontinuously, and on a quiet slow source that is audible as
+zipper noise. Level 10 integrated its bearing every frame for the life of the
+project while its panner stayed where `init()` put it, so the level whose whole
+premise is a source that will not hold still had a source that never moved, and
+the binaural image contradicted every other channel. If a level's source
+bearing changes, `movePanner` is not optional.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in
@@ -61,12 +100,28 @@ schedule pillar 3 refuses. Don't add a stinger, a sound, or randomness to
 them, and don't make the reward vary — the point is legibility, not surprise.
 
 **Level 1 is easier the very first time anyone plays it.** `state.onboarding`
-is true only for the first trial a Seeker ever starts, and level 1 uses it to
+is true only for the first trial a Seeker ever *enters*, and level 1 uses it to
 seed the draft 28–52° away instead of anywhere in the circle. It changes an
 initial condition, never a mechanic — tolerance, hold and decay are identical
-— and it never happens again. Same for the `actionLine` above the briefing.
-Don't extend either into a general difficulty assist; a hint that returns in
-level 12 is a different thing entirely and undercuts the trained-ear premise.
+— and it never happens again. Don't extend it into a general difficulty assist;
+a hint that returns in level 12 is a different thing entirely and undercuts the
+trained-ear premise.
+
+"Enters" is load-bearing and used not to be true. `everPlayed` was set only by
+`completeTrial`, so the assist retired on first *success* — meaning a Seeker who
+never finished a trial kept it indefinitely, which is precisely the population
+this rule excludes. `enterTrial` in `progress.js` now marks it on entry, which
+is what the flag's own docstring always claimed. The same fix gives the title
+screen a Continue button the moment anyone has begun anything.
+
+**The `actionLine` is scoped to control schemes, not to the first trial ever.**
+It is shown the first time a Seeker meets each of `hold`, `commit` and
+`breathe` — levels 1, 2 and 4 — via `hasPractisedControl`. Tying it to the
+first trial ever, as it was, retired the plain verb exactly one level before
+the controls first changed: level 2 introduces a commit button and level 4
+removes steering altogether, both with no instruction. This is teaching the
+verb, not easing the difficulty, and it must stay that way — it names *what
+the control does*, never where the source is or how to find it.
 
 **Progress is stored, but almost nothing about it is.** `src/engine/progress.js`
 persists which trials are done, where to resume, and which Disciplines have
@@ -202,8 +257,17 @@ grand for pillar 3's register while the rare one stops registering as rare.
 | Completion | every trial | `SikkuKolamLoader` snapping taut, dyed by the level's Force (`GameScreen`) |
 | Discipline reveal | 5× in levels 1–10 | `ChambaRumalCard`'s dye-flip, turned over by the player (`EndScreen`) |
 
-A Discipline is named only once *every* built level practising it is finished
-(`newlyRevealedDiscipline`) — deterministic, never random.
+A Discipline is named when the level carrying `revealsDiscipline: true` is
+finished (`newlyRevealedDiscipline`) — deterministic, never random.
+
+This used to ask whether *every* built level practising a Discipline was
+complete, which made the position of the rarest beat a function of the build
+backlog: FILTER is {2,3,8} and lands at level 8 today, but shipping more FILTER
+levels in the 11–40 block would have moved it later, retroactively, for every
+new Seeker. The flags are placed to reproduce the old reveals exactly (levels
+6, 7, 8, 9, 10) — this was a correctness fix, not a re-pacing. Whether a reveal
+should land earlier is a live design question, and it is now one field per
+level rather than an emergent property of set arithmetic.
 
 ### The five Forces have five different signatures
 
