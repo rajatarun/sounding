@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { TantuButton, TantuMeter, SikkuKolamLoader } from '@weaveaijs/tantu';
 
-import { TRIAL_AUDIO_SCALE } from '../engine/constants.js';
+import { TRIAL_AUDIO_SCALE, PRESENCE_MARKS, MARK_REARM } from '../engine/constants.js';
 import { useSubstrate } from '../components/LoomSubstrate.jsx';
 
 /**
- * Cumulative-presence marks that the loom answers.
- *
- * Deliberately fixed and deterministic, not a variable schedule: a predictable
- * tick is a progress bar with marks on it, where an unpredictable one is the
- * reward loop docs/DESIGN.md § 3 exists to refuse. The answer is a dye front
- * wicking outward from the orb — continuous, no stinger — for the same reason.
+ * Cumulative-presence marks that the loom answers, and the fall-back needed
+ * before one can answer again. Both moved to constants.js so the level
+ * contract check can read a level's `depthAt` against them — see there for
+ * why they are fixed and deterministic.
  */
-const MARKS = [25, 50, 75, 100];
-/** How far presence must fall back before a mark can answer again. */
-const REARM = 12;
+const MARKS = PRESENCE_MARKS;
+const REARM = MARK_REARM;
 
 /** How long the completion beat holds the screen before the end card. */
 const BEAT_MS = 2100;

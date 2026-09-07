@@ -11,7 +11,7 @@ import { TantuLoom } from '@weaveaijs/tantu';
 import { AudioEngine } from './engine/audio.js';
 import { Steering } from './engine/input.js';
 import { TRIALS_PER_LEVEL } from './engine/constants.js';
-import { FIRST_NARROWING } from './levels/first-narrowing.js';
+import { LEVELS, BUILT_IDS } from './levels/registry.js';
 import {
   loadProgress, saveProgress, completeTrial, nextTrialFor,
   newlyRevealedDiscipline, markRevealed, enterTrial, hasPractisedControl,
@@ -23,10 +23,6 @@ import { CalibrationScreen } from './screens/CalibrationScreen.jsx';
 import { BriefingScreen } from './screens/BriefingScreen.jsx';
 import { GameScreen } from './screens/GameScreen.jsx';
 import { EndScreen } from './screens/EndScreen.jsx';
-
-const LEVELS = {};
-FIRST_NARROWING.forEach((lv) => { LEVELS[lv.id] = lv; });
-const BUILT_IDS = FIRST_NARROWING.map((lv) => lv.id).sort((a, b) => a - b);
 
 export function App() {
   const [screen, setScreen] = useState('title');
