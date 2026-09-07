@@ -61,6 +61,18 @@ export function forget() {
  * asked for a code and closed the tab has an unconfirmed account, and typing
  * the same address must resend the sign-up code rather than dead-end. That is
  * why the code screen has to be reachable from a cold start.
+ *
+ * KNOWN, AND NOT FIXABLE HERE: a new address costs one request, a registered
+ * one costs two. That is an enumeration signal, and padding it out from this
+ * file would be theatre — the browser talks to Cognito directly, so anyone who
+ * can count our requests can also read Cognito's own replies, and
+ * UsernameExistsException says it outright. Equalising the count hides the
+ * tell from nobody who could see it in the first place. Closing it means the
+ * browser stops talking to Cognito directly: one endpoint of our own that
+ * makes both branches one indistinguishable call. That is a provisioning
+ * decision, not a refactor — see `infra/README.md`. What this file *does* owe,
+ * and keeps, is that neither branch is distinguishable on the glass: same
+ * screen, same copy, same field.
  */
 export async function submitAddress(email) {
   if (!(await accountConfig())) return { ok: false, state: 'unknown', code: 'NotConfigured' };

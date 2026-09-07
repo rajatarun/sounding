@@ -250,6 +250,10 @@ body.snd-noscroll {
   justify-content: center;
 }
 
+/* A breathe level has no steering, so the field is not a drag surface there —
+   it carries only the reading. Nothing to preventDefault, nothing to lock. */
+.snd-voidfield-still { touch-action: auto; }
+
 .snd-drag-hint {
   position: absolute;
   top: 50%;

@@ -78,7 +78,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
         const box = node.getBoundingClientRect();
         substrate.pulse(box.left + box.width / 2, box.top + box.height / 2);
       } else {
-        // A breathe level shows no orb — dye from the middle of the cloth.
+        // Only before the orb has mounted — dye from the middle of the cloth.
         substrate.pulse(window.innerWidth / 2, window.innerHeight / 2);
       }
       // FORCES.MASS names haptics as its channel; this is the only level family
@@ -217,30 +217,46 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     );
   }
 
+  const steers = level.control !== 'breathe';
+
   return (
     <div className="snd-screen snd-screen-game" data-force={force}>
       <div className="snd-control-badge">
         steering · {gyroActive ? 'phone compass' : 'swipe'}
       </div>
 
-      {level.control !== 'breathe' && (
-        <div className="snd-voidfield" ref={dragzoneRef} data-depth={depth}>
+      {/* The field is the level's feedback — presence, the word, the orb — and
+          it belongs to every level. Only the *steering* half of it is
+          conditional: the drag surface and its hint. This whole block used to
+          be gated on `control !== 'breathe'`, which meant levels 4 and 9 called
+          setPresence, setOrb and setWord every frame into nothing at all. The
+          visible cost landed on the presence marks: their motion answer is a
+          dye front, and a dye front is correctly suppressed under reduced
+          motion, so the static [data-depth] ladder is the only answer those
+          players get — and on a breathe level it had no element to sit on. */}
+      <div
+        className={`snd-voidfield${steers ? '' : ' snd-voidfield-still'}`}
+        ref={steers ? dragzoneRef : undefined}
+        data-depth={depth}
+      >
+        {steers && (
           <div className="snd-drag-hint">
             {gyroActive ? 'turn your body or phone to steer' : '◂ swipe to turn ▸'}
           </div>
-          <div className="snd-breath-word">{word}</div>
-          <div
-            ref={orbRef}
-            className={`snd-orb${orb.notice ? ' snd-orb-notice' : ''}`}
-            style={{ transform: `scale(${orbScale})`, opacity: orbOpacity }}
-          />
-          <div className="snd-presence-wrap">
-            <TantuMeter value={presence} label="Presence" />
-          </div>
+        )}
+        <div className="snd-breath-word">{word}</div>
+        <div
+          ref={orbRef}
+          className={`snd-orb${orb.notice ? ' snd-orb-notice' : ''}`}
+          style={{ transform: `scale(${orbScale})`, opacity: orbOpacity }}
+        />
+        <div className="snd-presence-wrap">
+          <TantuMeter value={presence} label="Presence" />
         </div>
-      )}
+      </div>
 
-      {level.control !== 'breathe' && <div className="snd-heading-cue">{heading}</div>}
+      {/* A bearing readout, and a breathe level has no bearing. */}
+      {steers && <div className="snd-heading-cue">{heading}</div>}
 
       {level.control === 'commit' && (
         <div className="snd-controls-row">

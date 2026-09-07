@@ -586,6 +586,29 @@ No AWS credentials, and the network egress proxy blocks `aws.amazon.com`,
 10. **The site's real production origin(s)**, for the `AllowedOrigin` parameter
     and the CORS policy.
 
+## Open: the address step is a request-count oracle
+
+The browser talks to Cognito directly, so the shape of step one is public: a
+new address is one `SignUp`; a registered one is a failed `SignUp` followed by
+`InitiateAuth`. One request against two. The UI hides the branch — same screen,
+same copy, same field, and no provider text ever reaches the glass — but the
+network does not, and cannot be made to from the client: an observer who can
+count our requests can equally read `UsernameExistsException` in the reply.
+Padding the count would only cost a round trip and tell an attacker nothing
+less.
+
+Closing it needs the browser to stop calling Cognito directly. The shape is one
+Lambda behind Function URL or API Gateway that takes an address, performs
+whichever branch applies with the pool's own credentials, and returns the same
+opaque `awaiting-code` either way — the same collapsing the two branches already
+get on screen, applied one layer lower. Costs: a function, a role, an endpoint,
+CORS, and a rate limit of its own (the endpoint becomes the thing worth
+throttling, which today is Cognito's problem). Not provisioned, not designed;
+raised here so the next identity change starts from it rather than rediscovering
+it.
+
+Marked in the code at `src/account/session.js`, above `submitAddress`.
+
 ## Sources
 
 - [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) (via search

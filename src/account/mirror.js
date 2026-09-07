@@ -23,9 +23,30 @@ import { encode, decode } from './progress-codec.js';
 import { idToken, isSignedIn } from './session.js';
 import { pullProgress, pushProgress } from './sync.js';
 
-/** Set when a push failed, so the account screen can say so as a resting fact. */
+/**
+ * Set when a sync failed, so the account screen can say so as a resting fact.
+ *
+ * Observable rather than merely readable: a screen that calls the getter during
+ * render only learns the answer when it happens to re-render, so a failure that
+ * happened while the player was watching stayed invisible until they left and
+ * came back. Still nothing during play — see the note at the top of this file.
+ */
 let unsynced = false;
+const watchers = new Set();
+
 export function hasUnsyncedChanges() { return unsynced; }
+
+/** Subscribe to changes. Returns an unsubscribe, for useEffect to call. */
+export function onSyncChange(fn) {
+  watchers.add(fn);
+  return () => watchers.delete(fn);
+}
+
+function setUnsynced(value) {
+  if (unsynced === value) return;
+  unsynced = value;
+  watchers.forEach((fn) => fn(value));
+}
 
 /**
  * Fold the account's copy into this device's. Called once, after a sign-in.
@@ -34,16 +55,19 @@ export function hasUnsyncedChanges() { return unsynced; }
 export async function pull() {
   if (!isSignedIn()) return null;
   const r = await pullProgress(idToken());
-  if (!r.ok) { unsynced = true; return null; }
+  if (!r.ok) { setUnsynced(true); return null; }
   const local = loadProgress();
-  if (!r.data || !r.data.p) return local;
-  let remote;
-  try {
-    remote = decode(r.data.p, DISCIPLINES);
-  } catch (e) {
-    // A blob this build cannot read is not worth losing the local copy over.
-    return local;
-  }
+  // `blob`, not `data.p`. This read the raw API envelope through a client that
+  // had already unwrapped it, so `r.data` was always undefined, the guard below
+  // always returned early, and the merge never ran once — a Seeker signing in
+  // on a second device got a fresh game and no error anywhere, which is the
+  // worst shape a bug can have in a store whose whole job is not losing a place.
+  if (!r.blob) return local;
+  // decode() answers null for a blob it cannot read rather than throwing, so a
+  // try/catch never sees it and mergeProgress(local, null) is what throws. Test
+  // the value, not the control flow.
+  const remote = decode(r.blob, DISCIPLINES);
+  if (!remote) return local;
   return saveProgress(mergeProgress(local, remote));
 }
 
@@ -54,5 +78,5 @@ export async function pull() {
 export async function push(progress) {
   if (!isSignedIn()) return;
   const r = await pushProgress(idToken(), encode(progress, DISCIPLINES));
-  unsynced = !r.ok;
+  setUnsynced(!r.ok);
 }

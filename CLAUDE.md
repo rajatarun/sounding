@@ -76,6 +76,18 @@ premise is a source that will not hold still had a source that never moved, and
 the binaural image contradicted every other channel. If a level's source
 bearing changes, `movePanner` is not optional.
 
+**The feedback field is drawn on every level, steering or not.** Presence, the
+breath word and the orb live in `.snd-voidfield`, and only the *drag surface*
+and its hint are conditional on `control !== 'breathe'`. The whole block used to
+be gated together, so levels 4 and 9 called `setPresence`, `setOrb` and
+`setWord` every frame into nothing at all. It showed up first as an
+accessibility defect: a presence mark's answer is a dye front, `pulse()`
+correctly refuses to draw one under reduced motion, and the static
+`[data-depth]` ladder that covers for it had no element to sit on — so on a
+breathe level a reduced-motion Seeker crossed 25/50/75/100% and nothing changed
+anywhere. Don't re-gate the field on the control scheme; gate the steering
+affordance, which is the only part that is actually about steering.
+
 **Levels 1–10 have no fail state, no timer, and no score.** Also intentional.
 The First Narrowing is a training era; the player cannot lose. Do not add
 health bars, countdowns, or scoring to anything in
@@ -387,6 +399,16 @@ called that. That one is on the author.
 independently. The upgrade path is a thin native `WKWebView` wrapper that
 bridges head-tracking yaw into `Steering.turn()` — the engine already takes
 relative deltas, so this needs no gameplay changes. See `docs/ROADMAP.md`.
+
+**The account step-one branch is a request-count oracle.** A new address costs
+one Cognito call, a registered one costs two. The screen hides which branch you
+are on; the network does not. It cannot be closed from the client — the browser
+talks to Cognito directly, so anyone counting our requests can also read
+`UsernameExistsException` in the reply, and padding the count would buy a round
+trip and nothing else. The fix is an endpoint of our own that makes both
+branches one opaque call, which is provisioning, not a refactor: see
+`infra/README.md` § the address step, and the note above `submitAddress` in
+`src/account/session.js`.
 
 **Tuning is unvalidated.** The gain curves, hold durations, and trial scaling
 are reasoned guesses, not playtested numbers. `TRIAL_AUDIO_SCALE` was raised
