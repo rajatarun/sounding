@@ -126,26 +126,44 @@ function mapError(type, status) {
 /* ------------------------------------------------------------------ sign-up */
 
 /**
- * Create an account. The pool takes one attribute — an email address — and no
- * password: `AllowedFirstAuthFactors: [EMAIL_OTP]` makes the pool passwordless,
- * so there is no password to choose, forget, reset, or leak.
+ * A password nobody will ever know, including this project.
  *
- * UNVERIFIED: whether SignUp accepts an omitted `Password` on a passwordless
- * pool is not stated in any documentation I could reach (see infra/README.md
- * § Could not verify). If the API rejects the call with
- * InvalidParameterException naming Password, the fallback is one line — send a
- * cryptographically random 32-character password and discard it, since nothing
- * will ever authenticate with it:
+ * The pool cannot be configured without PASSWORD as an allowed first factor —
+ * Cognito rejects the stack outright, which is how this was found:
  *
- *   Password: [...crypto.getRandomValues(new Uint8Array(24))]
- *     .map((b) => b.toString(36)).join('').slice(0, 32) + 'Aa1!'
+ *   Invalid request provided: PASSWORD should be configured as one of the
+ *   allowed first auth factors.
  *
- * Test this against the real pool before wiring the UI.
+ * So every account gets one, generated here, used once, and discarded in the
+ * same expression. It is never stored, never shown, never sent anywhere but
+ * this single SignUp call, and no code path can retrieve it. EMAIL_OTP stays
+ * the only factor that can actually authenticate anyone, and the player never
+ * learns a password exists.
+ *
+ * crypto.getRandomValues, not Math.random: this is a credential, however
+ * short-lived, and the difference costs nothing. The suffix satisfies
+ * Cognito's default policy (upper, lower, digit, symbol) so the shape of the
+ * random part never decides whether sign-up works.
+ */
+function throwawayPassword() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const body = Array.from(bytes, (b) => b.toString(36)).join('').slice(0, 28);
+  return `${body}Aa1!`;
+}
+
+/**
+ * Create an account: one attribute, an email address, and a password that
+ * exists only to satisfy the API — see above.
+ *
+ * The player is never asked for one and never told one was created. The UI has
+ * no password field, no strength meter, no policy text and no reset flow,
+ * because none of those describe anything a player can act on.
  */
 export async function signUp(email) {
   const r = await call('SignUp', {
     ClientId: POOL.clientId,
     Username: email,
+    Password: throwawayPassword(),
     UserAttributes: [{ Name: 'email', Value: email }],
   });
   if (!r.ok) return r;

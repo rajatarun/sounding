@@ -31,8 +31,13 @@ infrastructure as code plus exact steps for a human to run; see
 | `UI-STATES.md` | the contract for whoever builds the surface in Tantu |
 | `APPLY.md` | preconditions, apply, smoke test, teardown |
 
-**The shape in one paragraph.** A passwordless Cognito user pool — email
-address, six-digit code, no password anywhere. The client is hand-written
+**The shape in one paragraph.** A Cognito user pool that is passwordless to
+the player — email address, six-digit code, no password ever chosen, shown or
+typed. (`PASSWORD` is listed among the pool's first auth factors because
+Cognito refuses to create one without it; sign-up sends a random password that
+is discarded immediately and never known to anyone, so `EMAIL_OTP` is the only
+factor that can authenticate. See the SignInPolicy comment in
+`sounding-identity.yaml`.) The client is hand-written
 `fetch`, because the unauthenticated user-pool operations are plain unsigned
 JSON and the libraries that wrap them cost 27–58 KB gzipped to do it. Progress
 syncs to a DynamoDB table through an HTTP API with a JWT authorizer, as one
@@ -103,7 +108,8 @@ apart is that this design has no password, and almost everything those libraries
 weigh is machinery this flow does not use.
 
 - **SRP** is the bulk of `amazon-cognito-identity-js`: a bignum implementation,
-  a hash chain, a padded-hex layer. A passwordless pool runs no SRP.
+  a hash chain, a padded-hex layer. This flow runs no SRP: nobody ever proves
+  knowledge of a password, because nobody knows one.
 - **SigV4 and the credential chain** are the bulk of the AWS SDK clients. The
   Cognito operations this flow makes are *unauthenticated* — `SignUp`,
   `InitiateAuth`, `RespondToAuthChallenge` — and the authenticated ones
