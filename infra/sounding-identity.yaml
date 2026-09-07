@@ -31,13 +31,17 @@ Description: >-
 Parameters:
   AllowedOrigin:
     Type: String
-    Default: https://aiweave.org
+    Default: https://sounding.aiweave.org
     Description: >-
       The exact origin the game is served from, for the API's CORS policy. It
-      must be https. UNVERIFIED FROM HERE: the deploy workflow publishes to an
-      S3 *website* endpoint, which serves plain HTTP; whether aiweave.org has
-      TLS in front of it could not be checked from this environment and is a
-      blocking precondition. See README.md § The TLS precondition.
+      must be https, and it is a single origin rather than a list on purpose:
+      the whole reason the game has its own hostname is that browser storage —
+      including any token this API's answers are kept beside — is scoped to the
+      origin. Allowing aiweave.org here would hand that back to Storybook.
+
+      The TLS precondition this parameter used to warn about is met:
+      aiweave.org and its subdomains are served through CloudFront, and
+      sounding.aiweave.org is a distribution of its own. See HOSTING.md.
 
   SesSourceArn:
     Type: String
