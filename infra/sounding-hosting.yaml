@@ -26,9 +26,12 @@ AWSTemplateFormatVersion: "2010-09-09"
 #     alias.
 #   - It does not touch
 #     arn:aws:iam::239571291755:role/teamweave-github-actions-sam-deployer,
-#     and adds no permission to it. The deploy workflow writes S3 objects and
-#     nothing else, before and after this stack — see HOSTING.md § Does a
-#     deploy need an invalidation.
+#     and adds no permission to it. It does not need to: that role already
+#     deploys CloudFormation, which rajatarun/ContextWeave has been doing with
+#     it for some time. An earlier draft of this file said the role writes S3
+#     objects and nothing else — that was read off aiweave's workflow alone and
+#     was wrong. This stack is applied by that workflow, not by hand; see
+#     HOSTING.md § Applying it.
 #   - It enables no access logging. A CloudFront log line is a timestamped
 #     record of who loaded the game and when, which is exactly the artifact
 #     this project's storage design refuses to keep. Standard logging is
