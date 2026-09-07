@@ -5,14 +5,11 @@ credentials, against an account that already serves three live deliverables.
 Every command below is for a human with the account owner's own credentials to
 run, in order, reading the output.
 
-> **Both blockers this design named are now answered, and this document has not
-> yet been rewritten around them.** `aiweave.org` does serve HTTPS via
-> CloudFront, and the owner chose the dedicated origin
-> `sounding.aiweave.org` — so the TLS blocker is gone and the shared-origin
-> concern is resolved by the move rather than being open. Read anything below
-> that treats those as unsettled as out of date; `sounding-hosting.yaml`,
-> `../legacy-origin/` and `../src/engine/handoff.js` are the work that answers
-> them. The prose here is being brought back into line separately.
+> **Read [HOSTING.md](HOSTING.md) first.** The game is moving to its own
+> hostname, and the order matters: the bridge page that carries old players'
+> saved progress must not be published until `sounding.aiweave.org` actually
+> resolves, or it sends people to an address that does not answer. This file
+> covers the identity stack only.
 
 ---
 

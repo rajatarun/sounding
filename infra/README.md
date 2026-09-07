@@ -6,14 +6,19 @@ deliverables from one bucket and one deploy role. Everything is checked-in
 infrastructure as code plus exact steps for a human to run; see
 [APPLY.md](APPLY.md).
 
-> **Both blockers this design named are now answered, and this document has not
-> yet been rewritten around them.** `aiweave.org` does serve HTTPS via
-> CloudFront, and the owner chose the dedicated origin
-> `sounding.aiweave.org` — so the TLS blocker is gone and the shared-origin
-> concern is resolved by the move rather than being open. Read anything below
-> that treats those as unsettled as out of date; `sounding-hosting.yaml`,
-> `../legacy-origin/` and `../src/engine/handoff.js` are the work that answers
-> them. The prose here is being brought back into line separately.
+> **Both blockers this design named are answered.** `aiweave.org` serves HTTPS
+> via CloudFront, so TLS is not in the way. And the shared-origin problem — that
+> `/sounding/` sat on the same browser origin as Storybook, which renders
+> arbitrary component stories and could therefore read a refresh token out of
+> `localStorage` — is solved rather than accepted: the owner chose a dedicated
+> hostname, `sounding.aiweave.org`. [HOSTING.md](HOSTING.md) is that stack and
+> its runbook, `sounding-hosting.yaml` the template.
+>
+> The move has its own cost, and it is paid in `../legacy-origin/` and
+> `../src/engine/handoff.js`: browser storage is scoped to the origin, so every
+> Seeker who played before the move holds their only save under `aiweave.org`.
+> That work carries it across and is needed whether or not accounts are ever
+> built.
 
 | file | what it is |
 |---|---|
