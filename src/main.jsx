@@ -18,6 +18,13 @@ import '@weaveaijs/tantu/styles.css';
 import './styles/game.css';
 
 import { App } from './App.jsx';
+import { consumeHandoff } from './engine/handoff.js';
+
+// Before anything reads progress. A Seeker arriving from the old
+// aiweave.org/sounding/ address carries their saved place in the URL fragment;
+// App's very first render reads storage, so the merge has to have happened by
+// then. No-op on every other load. See src/engine/handoff.js.
+consumeHandoff();
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

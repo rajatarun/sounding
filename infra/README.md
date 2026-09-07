@@ -6,6 +6,15 @@ deliverables from one bucket and one deploy role. Everything is checked-in
 infrastructure as code plus exact steps for a human to run; see
 [APPLY.md](APPLY.md).
 
+> **Both blockers this design named are now answered, and this document has not
+> yet been rewritten around them.** `aiweave.org` does serve HTTPS via
+> CloudFront, and the owner chose the dedicated origin
+> `sounding.aiweave.org` — so the TLS blocker is gone and the shared-origin
+> concern is resolved by the move rather than being open. Read anything below
+> that treats those as unsettled as out of date; `sounding-hosting.yaml`,
+> `../legacy-origin/` and `../src/engine/handoff.js` are the work that answers
+> them. The prose here is being brought back into line separately.
+
 | file | what it is |
 |---|---|
 | `sounding-identity.yaml` | the whole stack — CloudFormation, 14 resources, self-contained |
