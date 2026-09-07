@@ -263,6 +263,97 @@ export class AudioEngine {
     return { src, filt, gain, panner, angle: angleDeg };
   }
 
+  /**
+   * A positioned source, with its bearing and its level owned for you.
+   *
+   * `voice()` hands back raw nodes, which is why every audio defect this
+   * project has had was written the same way: the level reached past the
+   * engine and had to remember, per frame and by hand, to scale by the trial
+   * and to move the panner it had placed. Three levels forgot one, one level
+   * forgot the other, and none of it was visible from the interface.
+   *
+   * A Source cannot forget. `level()` applies audioScale; `bearing()` ramps
+   * the panner. New levels should use this and reach for `voice()` only when
+   * they genuinely need something it cannot express.
+   *
+   *   const draft = audio.source(angle, { color: 'brown', freq: 420 });
+   *   draft.bearing(s.angle);      // moves the sound, not just the maths
+   *   draft.level(0.02 + a * 0.5); // trial scaling applied for you
+   */
+  source(bearingDeg, opts = {}) {
+    const v = this.voice(bearingDeg, opts);
+    const engine = this;
+    let currentBearing = bearingDeg;
+    return {
+      nodes: v,
+      get angle() { return currentBearing; },
+      /** Move the source. Ramped, never assigned — see movePanner. */
+      bearing(deg) {
+        if (deg === currentBearing) return this;
+        currentBearing = deg;
+        engine.movePanner(v.panner, deg);
+        return this;
+      },
+      /** Set level *before* trial scaling; the scaling is applied here. */
+      level(value, timeConstant = 0.25) {
+        v.gain.gain.setTargetAtTime(
+          Math.max(0, value) * engine.audioScale, engine.ctx.currentTime, timeConstant,
+        );
+        return this;
+      },
+      /** Shape the voice. A level-invariant channel — prefer it to gain. */
+      timbre({ freq, Q }, timeConstant = 0.3) {
+        const now = engine.ctx.currentTime;
+        if (freq != null) v.filt.frequency.setTargetAtTime(freq, now, timeConstant);
+        if (Q != null) v.filt.Q.setTargetAtTime(Q, now, timeConstant);
+        return this;
+      },
+      stop() { try { v.src.stop(); } catch (e) { /* already stopped */ } },
+    };
+  }
+
+  /**
+   * A source that deliberately has no bearing — a room, a bed, a pressure.
+   *
+   * Routed through `nonPositioned`, so declining to place a sound costs no
+   * decibels. Connecting to `this.bus` by hand is the thing this exists to
+   * stop; `npm run check` treats that as an error.
+   */
+  ambient(opts = {}) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.buffers[opts.color || 'brown'];
+    src.loop = true;
+
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = opts.filterType || 'lowpass';
+    filt.frequency.value = opts.freq || 400;
+    filt.Q.value = opts.Q || 0.7;
+
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0;
+
+    src.connect(filt); filt.connect(gain); gain.connect(this.nonPositioned);
+    src.start();
+
+    const engine = this;
+    return {
+      nodes: { src, filt, gain },
+      level(value, timeConstant = 0.25) {
+        gain.gain.setTargetAtTime(
+          Math.max(0, value) * engine.audioScale, engine.ctx.currentTime, timeConstant,
+        );
+        return this;
+      },
+      timbre({ freq, Q }, timeConstant = 0.3) {
+        const now = engine.ctx.currentTime;
+        if (freq != null) filt.frequency.setTargetAtTime(freq, now, timeConstant);
+        if (Q != null) filt.Q.setTargetAtTime(Q, now, timeConstant);
+        return this;
+      },
+      stop() { try { src.stop(); } catch (e) { /* already stopped */ } },
+    };
+  }
+
   /** A one-shot positioned sound (rustle, footfall, ember crackle). */
   burst(o = {}) {
     const buf = this.buffers[o.color || 'white'];
