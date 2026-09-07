@@ -14,10 +14,27 @@
    below are what keep those two voices apart. */
 :root { --tantu-font-display: var(--tantu-font-body-fallback); }
 
-html, body, #root { height: 100%; }
+/* min-height, not height: the title screen is taller than the viewport by
+   design — it carries the whole hundred-level chart — so a fixed 100% would
+   cap the document and strand everything below the fold. */
+html, body, #root { min-height: 100%; }
 body {
   margin: 0;
   background: var(--tantu-bg-substrate);
+  /* Keeps pull-to-refresh and rubber-band scroll chaining out without
+     stopping the page from scrolling at all. The scroll lock this replaced
+     was `overflow: hidden; touch-action: none` on the body, put there so a
+     steering swipe would not drag the page around. It did that, and it also
+     made the title screen's level chart and toolbar physically unreachable
+     on a phone — several hundred pixels below a fold nothing could cross.
+     The lock now lives where the swipe does; see .snd-voidfield below and
+     body.snd-noscroll, which GameScreen applies for its own lifetime. */
+  overscroll-behavior: none;
+}
+
+/* Held only while a level is on screen. The play surface is exactly one
+   screen and must not scroll under the Seeker's thumb. */
+body.snd-noscroll {
   overflow: hidden;
   touch-action: none;
 }
@@ -36,6 +53,14 @@ body {
 }
 
 .snd-screen {
+  /* Every screen is a direct child of Tantu's loom, which is a twelve-column
+     grid. A child that claims no warp span gets `span 1` — one twelfth — so on
+     a wide viewport the whole screen was being laid out in a 92px column while
+     the loom around it was 1184px, wrapping every label to roughly one
+     character per line and making the title screen eleven thousand pixels
+     tall. The narrow breakpoint collapses the grid to a single column, which
+     is why this only ever showed up on a desktop. A screen spans the warp. */
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -216,6 +241,10 @@ body {
 .snd-voidfield {
   position: absolute;
   inset: 0;
+  /* The steering surface. Steering.attachDrag binds touchmove passively and
+     so cannot preventDefault, which makes this declaration — not the
+     listener — the thing that stops a swipe scrolling the page. */
+  touch-action: none;
   display: flex;
   align-items: center;
   justify-content: center;

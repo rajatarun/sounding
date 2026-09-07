@@ -173,6 +173,14 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A level owns the whole viewport and is steered by swiping, so the page
+  // must not scroll beneath it. Scoped to this screen's lifetime rather than
+  // set globally on the body, which is what made the title screen unscrollable.
+  useEffect(() => {
+    document.body.classList.add('snd-noscroll');
+    return () => document.body.classList.remove('snd-noscroll');
+  }, []);
+
   // The beat: the thread winds, snaps taut, and the end card follows.
   useEffect(() => {
     if (!finishing) return undefined;
