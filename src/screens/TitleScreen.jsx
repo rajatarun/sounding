@@ -98,9 +98,20 @@ export function TitleScreen({ levels, progress, onCalibrate, onSelectLevel, onRe
             world, and it should not pretend otherwise. */}
         {onAccount && (
           <div className="snd-account-entry">
+            {/* The plain verb, not a description of the benefit. This said
+                "Carry your progress to another device" — which is accurate,
+                and is a euphemism for "sign in", and is therefore exactly what
+                infra/UI-STATES.md § Copy forbids: plain service words, no
+                invented synonyms. Somebody looking for a way to sign in
+                scanned past it, which is the whole failure mode that rule
+                exists to prevent. What it does for you goes underneath, where
+                it informs the choice instead of hiding it. */}
             <TantuButton variant="ghost" bleed={false} onClick={onAccount}>
-              Carry your progress to another device
+              Sign in
             </TantuButton>
+            <p className="snd-account-note">
+              Optional. Carries your place in the game to another device.
+            </p>
           </div>
         )}
       </CapillaryBleedSurface>
