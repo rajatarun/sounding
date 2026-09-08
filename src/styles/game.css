@@ -386,11 +386,19 @@ body.snd-noscroll {
    constants.js names a perceptual channel per Force and, until now, every
    one of them rendered as the same orb. These are those channels.
 
-   Nothing here animates `transform` or `opacity` on .snd-orb itself: those
-   two carry the live alignment reading as inline styles, and a CSS animation
-   outranks an inline declaration in the cascade — animating them would
-   silently overwrite the feedback the whole level is built on. Motion lives
-   on the pseudo-elements and in `filter`, which are otherwise unused.
+   `transform` and `opacity` on .snd-orb itself USED TO carry the live
+   alignment reading as inline styles — GameScreen wrote `scale(orbScale)`
+   and `orbOpacity` every frame — which made a CSS animation on either
+   property dangerous: an inline declaration outranks one in the cascade, so
+   animating them would have silently overwritten the feedback the level was
+   built on. That inline write is gone; the orb no longer reports alignment
+   at all (a sighted player watching it was reading a strictly better
+   instrument than the audio, with none of its thresholds or HRTF
+   ambiguity — see WELCOME_LINE in GameScreen.jsx). The two properties are
+   free to animate now. Nothing here does yet, on purpose: this file's job
+   was removing a signal, not inventing a new one, and Force motion still
+   lives on the pseudo-elements and in `filter` below by established
+   convention rather than by a constraint that no longer exists.
 
    Colours bind to semantic Tantu tokens wherever one fits. Mass is the single
    exception: no semantic token reads as "dense earth", so it takes a dye
@@ -608,4 +616,17 @@ body.snd-noscroll {
   font-size: 11px;
   letter-spacing: 0.06em;
   opacity: 0.62;
+}
+
+/* --- The one-time welcome ------------------------------------------------
+   Shown once, ever, the first trial any Seeker enters — see WELCOME_LINE in
+   GameScreen.jsx for why it exists and what it replaces. It rides
+   TantuDialog's own panel styling; only the woven line and the button row
+   need anything of their own. */
+.snd-welcome-line {
+  font-family: var(--tantu-font-display);
+  font-size: 17px;
+  line-height: 1.6;
+  color: inherit;
+  margin: 0 0 var(--tantu-knot-6) 0;
 }

@@ -132,6 +132,47 @@ tick is a progress bar with marks on it; an *unpredictable* one is the reward
 schedule pillar 3 refuses. Don't add a stinger, a sound, or randomness to
 them, and don't make the reward vary — the point is legibility, not surprise.
 
+**The orb no longer shows alignment, and that removal was the point.** It used
+to render `scale(orbScale)`/`orbOpacity` every frame, a continuous, zero-
+latency, hardware-independent readout of the exact `align` value every level
+is built on — not a shortcut a sighted player could take, but strictly the
+*better* sensor: no threshold, no equal-loudness tilt, no HRTF front/back
+ambiguity. The trained-ear premise only survived because players volunteered
+not to look at it. `GameScreen`'s orb div carries no inline style now; Force
+signature motion (drift, flicker, the rest) stays exactly where it was, on the
+pseudo-elements and in `filter`, untouched. `orb.notice` — a discrete flag for
+a false rhythm or an overheat — is unaffected; it was never the problem.
+
+What replaces the signal, once, is `WELCOME_LINE`: the first trial any Seeker
+ever enters shows a `TantuDialog` with the line woven in via Tantu's
+`BaluchariReveal` and spoken once via the Web Speech API (`src/engine/voice.js`
+— deliberately not routed through `AudioEngine`; it is chrome talking to a
+Seeker who has not entered the world's own audio yet, not a cue inside it).
+Second person, not first — this game has no narrator character anywhere in its
+fiction, and inventing one for a single line would be more world than was
+asked for. `speakOnce` is feature-detected and silent on failure; a Seeker with
+no speech synthesis gets the woven line alone, which is why the words carry
+the message and the voice is a bonus.
+
+A real design idea was raised alongside this and deliberately deferred rather
+than built here: an orb whose "battery" could visibly run low, urgency-flavoured,
+on a countdown. That is a genuine fail-state/timer, and levels 1–10 are not
+allowed one — see above. It belongs in the Third Narrowing, where CLAUDE.md
+already says urgency is deliberately introduced, not in the first level anyone
+ever plays. Noted here so the idea isn't lost, not because it was wrong.
+
+**`BaluchariReveal` lives in Tantu, not in this repo**, on the same reasoning
+as everything else in "The UI runs on Tantu" above: a text-weave primitive
+that presumed a vocabulary or a tone would not be reusable, so it was built
+upstream (`aiweave`, `src/tantu/components/BaluchariReveal.tsx`) rather than
+duplicated here. **As of this writing it is not yet published** —
+`@weaveaijs/tantu` stays at 0.3.2 on the npm registry until someone bumps the
+version and runs aiweave's `release.yaml`, which that workflow's own comments
+describe as "a deliberate human action" and not something to trigger casually.
+Until that happens, `GameScreen.jsx`'s import of `BaluchariReveal` will not
+resolve against a fresh `npm install` — this is expected, not a regression, and
+it is the one thing standing between this feature and actually running.
+
 **Level 1 is easier the very first time anyone plays it.** `state.onboarding`
 is true only for the first trial a Seeker ever *enters*, and level 1 uses it to
 seed the draft 28–52° away instead of anywhere in the circle. It changes an
