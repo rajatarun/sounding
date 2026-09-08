@@ -117,12 +117,48 @@ let browser = null;
 async function open({
   viewport = PHONE, reducedMotion, forcedColors, config = AUTH_CONFIG,
   cognito = {}, api = { p: null }, apiStatus = 200, progress, latencyMs = 0,
+  speech = 'present',
 } = {}) {
   const ctx = await browser.newContext({ viewport, reducedMotion, forcedColors });
   const page = await ctx.newPage();
   const calls = [];
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+
+  /* The Web Speech API, which `speakOnce` reaches for and which this harness
+     has no ears for. 'present' records what was said and still lets the real
+     engine try; 'absent' is a browser without synthesis; 'throws' is one that
+     has it and refuses. voice.js promises silence on all three. */
+  await page.addInitScript((mode) => {
+    window.__spoke = [];
+    window.__speechCancels = 0;
+    if (mode === 'absent') {
+      Object.defineProperty(window, 'speechSynthesis', { get() { return undefined; }, configurable: true });
+      return;
+    }
+    if (mode === 'throws') {
+      Object.defineProperty(window, 'speechSynthesis', {
+        get() {
+          return {
+            cancel() { throw new Error('synthesis refused'); },
+            speak() { throw new Error('synthesis refused'); },
+          };
+        },
+        configurable: true,
+      });
+      return;
+    }
+    const real = window.speechSynthesis;
+    Object.defineProperty(window, 'speechSynthesis', {
+      get() {
+        return {
+          speak(u) { window.__spoke.push(u.text); try { real.speak(u); } catch (e) { /* headless */ } },
+          cancel() { window.__speechCancels++; try { real.cancel(); } catch (e) { /* headless */ } },
+        };
+      },
+      configurable: true,
+    });
+  }, speech);
 
   if (progress) {
     await page.addInitScript((p) => {
@@ -169,6 +205,11 @@ const codeField = (page) => page.locator('.snd-account input[inputmode=numeric]'
 const submit = (page) => page.locator('.snd-account button[type=submit]');
 const fieldError = (page) => page.locator('.snd-account .tantu-field-error');
 const notice = (page) => page.locator('.snd-account .tantu-notice');
+
+/* Level 1's four-rung alignment word, in order. It is the only continuous-ish
+   channel the level still publishes to the DOM since the orb stopped carrying
+   a reading, and both `holdLevelOne` and the welcome group steer by it. */
+const LEVEL_ONE_RUNGS = { listening: 0, faint: 1, closer: 2, here: 3 };
 
 const focused = (page) => page.evaluate(() => {
   const el = document.activeElement;
@@ -627,6 +668,7 @@ try {
     await page.locator('button', { hasText: /^Begin — Level 1/ }).first().click();
     await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
     await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    await pastTheWelcome(page);
     await holdLevelOne(page);
     await page.getByText('Trial 1 of 3 complete', { exact: false }).waitFor({ timeout: 45000 });
     assert(errors.length === 0, `the page threw during play: ${errors.join(' / ')}`);
@@ -639,6 +681,7 @@ try {
     await page.locator('button', { hasText: /^Begin — Level 1/ }).first().click();
     await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
     await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    await pastTheWelcome(page);
     await holdLevelOne(page);
     await page.getByText('Trial 1 of 3 complete', { exact: false }).waitFor({ timeout: 45000 });
     const shown = await page.locator('.snd-screen').first().innerText();
@@ -694,7 +737,7 @@ try {
          the whole accrual inside one half-cycle: sync climbs at 9/s while the
          hold matches, so the mark falls at about 2.8s of unbroken holding. */
       seed: () => { Math.random = () => 0.999; },
-      hold: () => true,
+      controller: () => () => true,
     },
     9: {
       name: 'the forge',
@@ -702,14 +745,29 @@ try {
       seed: () => {},
       /* Heat rises at 22/s held and falls at 12/s released; progress accrues
          only inside the 60–85 band, at 2.5/s, so the mark is about ten seconds
-         of keeping the fire in its band. Temperature is read back off the orb's
-         own inline scale — `setOrb(temp / 100)` — which is the only place the
-         level publishes it. Held below 80 so the overheat burst never fires. */
-      hold: (strength) => {
-        const temp = ((strength - 0.78) / 0.42) * 100;
-        if (temp > 76) return false;
-        if (temp < 66) return true;
-        return null; // inside the band: leave the hand where it is
+         of keeping the fire in its band.
+       *
+         This used to read temperature straight off the orb's inline scale —
+         `setOrb(temp / 100)` — and that readout no longer exists: the orb
+         carries nothing continuous now (see the welcome group below). The only
+         channel this level still publishes heat on is `.snd-breath-word`,
+         which names three bands and nothing finer: below 45, 45–80, above 80.
+         Three rungs cannot hold a hand inside the 60–85 band that scores, so
+         the harness integrates the level's own rates and treats each word
+         boundary as a fix to correct the running estimate against. */
+      controller: () => {
+        let temp = 20;        // the level's own starting value
+        let at = null;
+        let held = false;
+        return (word, now) => {
+          if (at !== null) temp += (held ? 22 : -12) * ((now - at) / 1000);
+          at = now;
+          if (word === 'too hot — ease back') temp = Math.max(temp, 81);
+          else if (word === 'feed it more') temp = Math.min(temp, 44);
+          else temp = Math.min(Math.max(temp, 46), 79);
+          held = temp < 68;   // bang-bang about the middle of the scoring band
+          return held;
+        };
       },
     },
   };
@@ -743,25 +801,22 @@ try {
       await btn.dispatchEvent(want ? 'mousedown' : 'mouseup');
       held = want;
     };
-    const sample = () => page.evaluate(() => {
-      const orb = document.querySelector('.snd-orb');
-      const m = orb && /scale\(([\d.]+)\)/.exec(orb.style.transform);
-      return {
-        depth: document.querySelector('.snd-screen-game')?.getAttribute('data-depth') ?? 'no screen',
-        strength: m ? Number(m[1]) : 0,
-      };
-    });
+    const sample = () => page.evaluate(() => ({
+      depth: document.querySelector('.snd-screen-game')?.getAttribute('data-depth') ?? 'no screen',
+      word: document.querySelector('.snd-breath-word')?.textContent ?? '',
+    }));
 
     await hand(true);
     await page.waitForTimeout(700);
     const before = await page.evaluate(read);
 
+    const drive = spec.controller();
     const deadline = Date.now() + 60000;
     let crossed = false;
     while (Date.now() < deadline) {
       const now = await sample();
       if (now.depth !== '0') { crossed = true; break; }
-      await hand(spec.hold(now.strength));
+      await hand(drive(now.word, Date.now()));
       await page.waitForTimeout(150);
     }
     await page.waitForTimeout(1600); // the filter ladder's own transition
@@ -986,43 +1041,93 @@ try {
     assert(seen.length === 8, `only ${seen.length} of 8 level/viewport pairs were measured`);
   });
 
-  await t('.snd-orb never lets an animation overwrite the live alignment reading', async () => {
-    /* transform and opacity on .snd-orb carry the alignment reading as inline
-       styles, and a CSS animation outranks an inline declaration. Level 5 is
-       Ignition, the one Force whose signature animates the orb itself. */
-    const { ctx, page } = await open({
-      config: false,
-      progress: { done: [], next: { level: 5, trial: 1 }, revealed: [], everPlayed: true },
-    });
-    await page.locator('button', { hasText: /^Continue — Level 5/ }).first().click();
-    await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
-    await page.locator('.snd-orb').waitFor({ timeout: 8000 });
-    await page.waitForTimeout(900);
-    const reading = await page.evaluate(() => {
-      const orb = document.querySelector('.snd-orb');
-      const computed = getComputedStyle(orb);
-      const inlineScale = /scale\(([\d.]+)\)/.exec(orb.style.transform);
-      const m = /matrix\(([-\d.]+)/.exec(computed.transform);
-      return {
-        force: document.querySelector('[data-force]')?.dataset.force,
-        inlineScale: inlineScale ? Number(inlineScale[1]) : null,
-        computedScale: m ? Number(m[1]) : null,
-        inlineOpacity: Number(orb.style.opacity),
-        computedOpacity: Number(computed.opacity),
-        animation: computed.animationName,
-      };
-    });
-    assert(reading.force === 'ignition', `expected the Ignition signature, got ${reading.force}`);
-    assert(reading.animation && reading.animation !== 'none', 'no Force animation was running, so this proves nothing');
+  await t('the orb carries no continuous reading, and no Force signature could restore one', async () => {
+    /* This case used to compare the orb's inline transform/opacity against its
+       computed values, because those two inline properties carried the live
+       alignment reading and a CSS animation outranks an inline declaration.
+       The reading was deliberately removed — the orb was a strictly better
+       instrument than the ear the game is built on — so the old comparison is
+       gone with it, and leaving it would have been a stale assertion reporting
+       on a channel that no longer exists.
+     *
+       What is asserted instead is the removal itself, and the rule that
+       protected it, in the two directions each can regress:
+         - no level writes a continuous value back onto the orb as inline
+           style (the readout returning by the door it left through);
+         - no Force signature animates `transform` or `opacity` on `.snd-orb`,
+           which is the rule CLAUDE.md still states and the one that would
+           silently outrank any inline reading if one ever came back.
+       Levels 5 (Ignition, the one signature that animates the orb itself),
+       9 (whose orb published temperature) and 1 (alignment) are all walked. */
+    const seen = [];
+    for (const level of [1, 5, 9]) {
+      const { ctx, page } = await open({
+        config: false,
+        progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
+      });
+      await page.locator('button', { hasText: new RegExp(`— Level ${level}\\b`) }).first().click();
+      await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+      await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+      await page.waitForTimeout(900);
+
+      const reading = await page.evaluate(() => {
+        const orb = document.querySelector('.snd-orb');
+        const computed = getComputedStyle(orb);
+        /* Every keyframe of every animation currently on the orb, and which
+           properties it writes — read out of the live stylesheets rather than
+           assumed, so a new signature is covered the day it is added. */
+        const names = computed.animationName.split(',').map((s) => s.trim()).filter((s) => s && s !== 'none');
+        const written = {};
+        for (const sheet of document.styleSheets) {
+          let rules;
+          try { rules = sheet.cssRules; } catch (e) { continue; }
+          const walk = (list) => {
+            for (const rule of list) {
+              if (rule.cssRules && !rule.name) { walk(rule.cssRules); continue; }
+              if (!rule.name || !names.includes(rule.name)) continue;
+              written[rule.name] = written[rule.name] || [];
+              for (const frame of rule.cssRules) {
+                for (const prop of frame.style) {
+                  if (!written[rule.name].includes(prop)) written[rule.name].push(prop);
+                }
+              }
+            }
+          };
+          walk(rules);
+        }
+        return {
+          force: document.querySelector('[data-force]')?.dataset.force,
+          inlineStyle: orb.getAttribute('style'),
+          animations: names,
+          written,
+        };
+      });
+      await ctx.close();
+
+      assert(
+        reading.inlineStyle === null,
+        `level ${level}: the orb is carrying inline style again — "${reading.inlineStyle}". `
+        + 'A per-frame inline value on this element is the continuous alignment readout '
+        + 'that was removed on purpose; see WELCOME_LINE in GameScreen.jsx.',
+      );
+      for (const [name, props] of Object.entries(reading.written)) {
+        const banned = props.filter((p) => p === 'transform' || p === 'opacity');
+        assert(
+          banned.length === 0,
+          `level ${level} (${reading.force}): the ${name} keyframes write ${banned.join(' and ')} `
+          + 'on .snd-orb itself. CLAUDE.md keeps those two off this element; Force motion goes '
+          + 'on the pseudo-elements.',
+        );
+      }
+      seen.push(`${level}:${reading.force}:${reading.animations.join('+') || 'still'}`);
+    }
+    /* Level 5 is the one Force whose signature animates the orb element, so if
+       nothing was animating anywhere the keyframe half of this proved nothing. */
     assert(
-      Math.abs(reading.computedScale - reading.inlineScale) < 0.001,
-      `an animation is overwriting the orb's scale: inline ${reading.inlineScale}, computed ${reading.computedScale} (${reading.animation})`,
+      seen.some((s) => s.includes('ignition') && !s.endsWith('still')),
+      `no Force animation ran on the orb on any level walked (${seen.join(', ')}), `
+      + 'so the keyframe rule was never actually exercised',
     );
-    assert(
-      Math.abs(reading.computedOpacity - reading.inlineOpacity) < 0.001,
-      `an animation is overwriting the orb's opacity: inline ${reading.inlineOpacity}, computed ${reading.computedOpacity} (${reading.animation})`,
-    );
-    await ctx.close();
   });
 
   await t('the account screen survives forced colors', async () => {
@@ -1044,6 +1149,347 @@ try {
     });
     assert(err.color !== err.bg, `notice text is the same colour as its ground in forced colors (${JSON.stringify(err)})`);
     await ctx.close();
+  });
+
+  /* ------------------------------------------------------------------ */
+  group('The one-time welcome');
+
+  const WELCOME = 'There is nothing here to see. Only to hear. Breathe, and listen.';
+  const welcome = (page) => page.locator('[role=dialog].snd-welcome');
+
+  /** Straight into the first trial any Seeker ever enters, from a clean device. */
+  async function toFirstEverTrial(page) {
+    await page.locator('button', { hasText: /^Begin — Level 1/ }).first().click();
+    await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+    await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    await page.waitForTimeout(250);
+  }
+
+  await t('the welcome is shown on the first trial ever, and on no other', async () => {
+    /* `firstEver` is meant to track the same "first trial entered" semantics as
+       state.onboarding — set from `!progress.everPlayed` at the moment
+       enterTrial marks it. The three ways that can be wrong are: never showing,
+       showing again after a reload (entering is what retires the flag, not
+       finishing), and showing to a Seeker who has played before. */
+    const { ctx, page } = await open({ config: false });
+    await toFirstEverTrial(page);
+    assert(await welcome(page).count() === 1, 'the first trial any Seeker enters showed no welcome at all');
+
+    await page.reload();
+    await page.waitForTimeout(700);
+    await page.locator('button', { hasText: /— Level 1\b/ }).first().click();
+    await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+    await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    await page.waitForTimeout(400);
+    assert(
+      await welcome(page).count() === 0,
+      'the welcome came back after a reload — entering a trial is what retires the flag, '
+      + 'so a Seeker who never finished one must not be shown it twice',
+    );
+    await ctx.close();
+
+    const back = await open({
+      config: false,
+      progress: { done: [], next: { level: 1, trial: 1 }, revealed: [], everPlayed: true },
+    });
+    await back.page.locator('button', { hasText: /— Level 1\b/ }).first().click();
+    await back.page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+    await back.page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    await back.page.waitForTimeout(400);
+    assert(await welcome(back.page).count() === 0, 'a Seeker who has played before was shown the welcome');
+    await back.ctx.close();
+  });
+
+  await t('the woven line is readable, not only the dialog\'s name', async () => {
+    /* Two different people have to get this sentence.
+     *
+       A sighted Seeker gets it from the woven line. A Seeker on a screen
+       reader gets the dialog's accessible name when focus lands in it — once,
+       on arrival, with no way to ask for it again: `BaluchariReveal` marks its
+       visible line `aria-hidden="true"` permanently, and `announce={false}`
+       withholds the `role="status"` copy it would otherwise leave behind. So
+       browsing the dialog finds one word, "Begin", and the sentence the whole
+       screen exists to deliver is in the accessibility tree only as a name on
+       the container.
+     *
+       Asserted as: the dialog is named, AND the sentence survives somewhere a
+       reader can move to. Both, because either alone is satisfiable while the
+       other is broken. */
+    const { ctx, page } = await open({ config: false });
+    await toFirstEverTrial(page);
+    /* After the sweep has finished, so a `role="status"` copy that arrives with
+       the reveal — which is when BaluchariReveal fills it — is counted. */
+    await page.waitForTimeout(2700);
+    const seen = await page.evaluate(() => {
+      const d = document.querySelector('[role=dialog]');
+      const hidden = (el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          if (n.getAttribute('aria-hidden') === 'true') return true;
+        }
+        return false;
+      };
+      const readable = [];
+      const walk = document.createTreeWalker(d, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        const text = n.textContent.trim();
+        if (text && !hidden(n.parentElement)) readable.push(text);
+      }
+      return {
+        name: d.getAttribute('aria-label') || d.getAttribute('aria-labelledby'),
+        readable,
+        buried: [...d.querySelectorAll('[aria-hidden=true]')].map((el) => `${el.tagName}.${el.className}`),
+      };
+    });
+    await ctx.close();
+
+    assert(seen.name, 'the welcome dialog has no accessible name at all');
+    assert(
+      seen.readable.some((s) => s.includes('Only to hear')),
+      'the welcome line is nowhere in the accessibility tree except as the dialog\'s own name: '
+      + `readable content is ${JSON.stringify(seen.readable)}, and the sentence is inside `
+      + `${seen.buried.join(', ')}. A reader that announces the name on arrival gives it once and `
+      + 'cannot be asked again; one that does not gives a panel whose only content is "Begin". '
+      + 'BaluchariReveal leaves a role="status" copy for exactly this — it is switched off here '
+      + 'by announce={false}.',
+    );
+  });
+
+  await t('the trial does not run on behind the welcome', async () => {
+    /* The screen mounts the level and the dialog together: init() runs, the
+       cue starts, the frame loop starts, and the window keydown handler that
+       steers is bound — none of it gated on the welcome being gone. So a
+       Seeker still reading the line is already playing, and the arrow keys
+       reach the level straight through a panel that claims aria-modal="true".
+     *
+       Measured by steering under the scrim and reading what moved. The
+       presence mark is the part that costs something: its answer is a dye
+       front drawn from the orb, and the orb is behind an opaque scrim, so the
+       first mark any Seeker ever crosses can be spent where it cannot be
+       seen. */
+    const { ctx, page } = await open({ config: false });
+    await toFirstEverTrial(page);
+    const read = () => page.evaluate(() => ({
+      modal: document.querySelector('[role=dialog]')?.getAttribute('aria-modal') ?? null,
+      word: document.querySelector('.snd-breath-word')?.textContent ?? '',
+      presence: Number(document.querySelector('.snd-presence-wrap [aria-valuenow]')?.getAttribute('aria-valuenow') ?? -1),
+      depth: document.querySelector('.snd-screen-game')?.getAttribute('data-depth'),
+      /* What a press at the middle of the field would actually land on. */
+      overTheOrb: (() => {
+        const o = document.querySelector('.snd-orb').getBoundingClientRect();
+        const hit = document.elementFromPoint(o.left + o.width / 2, o.top + o.height / 2);
+        return hit ? `${hit.tagName}.${String(hit.className).split(' ')[0]}` : 'nothing';
+      })(),
+    }));
+
+    const start = await read();
+    assert(start.modal === 'true', 'the welcome is not a modal, so this case is measuring the wrong thing');
+
+    /* Sweep for the draft and hold it, exactly as holdLevelOne does — with the
+       welcome still up and never dismissed. */
+    let best = { r: -1, i: 0 };
+    for (let i = 0; i < 45; i++) {
+      const r = LEVEL_ONE_RUNGS[(await read()).word] ?? -1;
+      if (r > best.r) best = { r, i };
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(30);
+    }
+    for (let i = 0; i < 45 - best.i; i++) {
+      await page.keyboard.press('ArrowLeft');
+      await page.waitForTimeout(20);
+    }
+    await page.waitForTimeout(9000);
+    const end = await read();
+    await ctx.close();
+
+    assert(end.modal === 'true', 'the welcome dismissed itself during the case');
+    assert(
+      best.r < 3,
+      'the arrow keys steered the level through a dialog that declares aria-modal="true" — '
+      + `the sweep reached "${Object.keys(LEVEL_ONE_RUNGS)[best.r]}" with the panel still open. `
+      + 'aria-modal is a promise that nothing outside the panel is reachable; GameScreen binds its '
+      + 'keydown handler to window and does not check showWelcome.',
+    );
+    assert(
+      end.presence <= 0,
+      `presence reached ${end.presence.toFixed(1)}% while the welcome was still up — the trial is `
+      + 'running underneath it, from the frame the screen mounts.',
+    );
+    assert(
+      end.depth === '0',
+      `the ${end.depth === '1' ? '25%' : `depth-${end.depth}`} presence mark was crossed behind the `
+      + `scrim (a press at the middle of the field lands on ${end.overTheOrb}). The mark's answer is a `
+      + 'dye front drawn from the orb, which is under an opaque panel, so the first beat any Seeker '
+      + 'ever earns is spent where it cannot be seen.',
+    );
+  });
+
+  await t('dismissing the welcome hands focus to the screen, not to the document', async () => {
+    /* TantuDialog restores focus to whatever was focused when it opened. It
+       opened at mount, one commit after the briefing's own button was
+       unmounted, so what it captured was <body> — and that is where it hands
+       focus back. A keyboard Seeker finishes the welcome standing outside the
+       screen and has to Tab back in from the top of the document. */
+    const { ctx, page } = await open({ config: false });
+    await toFirstEverTrial(page);
+    const where = () => page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return 'BODY';
+      return `${el.tagName}${el.className ? `.${String(el.className).split(' ')[0]}` : ''}`;
+    });
+    const inside = await where();
+    assert(inside !== 'BODY', `the welcome opened without taking focus (activeElement is ${inside})`);
+
+    await page.getByRole('button', { name: 'Begin' }).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    assert(await welcome(page).count() === 0, 'Enter on Begin did not dismiss the welcome');
+    const after = await where();
+    await ctx.close();
+    assert(
+      after !== 'BODY',
+      'focus was dropped to <body> when the welcome closed. TantuDialog hands focus back to '
+      + 'whatever it captured on open, and at mount that was already <body> — the briefing\'s '
+      + 'button had been unmounted a commit earlier. The game screen should take focus itself.',
+    );
+  });
+
+  await t('the welcome fits the phone, and its one control is reachable', async () => {
+    for (const vp of [PHONE, SMALL]) {
+      const { ctx, page } = await open({ config: false, viewport: vp });
+      await toFirstEverTrial(page);
+      const m = await page.evaluate(() => {
+        const d = document.querySelector('[role=dialog]');
+        const btn = [...d.querySelectorAll('button')].pop();
+        const doc = document.documentElement;
+        const box = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }; };
+        const b = btn.getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return {
+          vw: doc.clientWidth, vh: doc.clientHeight,
+          dialog: box(d), btn: box(btn), label: btn.textContent.trim(),
+          clipped: d.scrollHeight > d.clientHeight + 1,
+          reaches: Boolean(hit && hit.closest('button') === btn),
+          hit: hit ? `${hit.tagName}.${String(hit.className).split(' ')[0]}` : 'nothing',
+        };
+      });
+      await ctx.close();
+      const at = `${vp.width}×${vp.height}`;
+      assert(
+        m.btn.bottom <= m.vh && m.btn.top >= 0 && m.btn.left >= 0 && m.btn.right <= m.vw,
+        `${at}: the "${m.label}" control is outside the viewport at ${JSON.stringify(m.btn)} — `
+        + 'the only way past the welcome is below the fold',
+      );
+      assert(m.reaches, `${at}: a press at the middle of "${m.label}" lands on ${m.hit}`);
+      assert(
+        !m.clipped,
+        `${at}: the welcome panel is scrolling its own content (${JSON.stringify(m.dialog)}), `
+        + 'so part of the line is out of sight behind a scroll nobody is told about',
+      );
+    }
+  });
+
+  await t('the line is legible with motion reduced, and in forced colors', async () => {
+    /* The reveal is a clip-path sweep and `clip-path: inset(0 100% 0 0)` is the
+       line's own resting value — the animation is what opens it. Under reduced
+       motion the animation is exactly what a Seeker has asked not to have, so
+       the promise BaluchariReveal makes is that the sentence "appears whole,
+       immediately": it starts in its settled class instead. That is measured
+       here at 300ms, well before any 2.2s sweep could have opened the clip on
+       its own, so a broken settled state cannot hide behind the animation's
+       fill mode.
+     *
+       Measured as painted width, not as a clip-path string. `inset(0px 0% 0px
+       0px)` and `inset(0px)` are the same picture and different text, and a
+       case that reads the text calls one of them a defect. */
+    const CLIP = () => {
+      const line = document.querySelector('.tantu-baluchari-line');
+      const cs = getComputedStyle(line);
+      const r = line.getBoundingClientRect();
+      const shown = (() => {
+        const m = /^inset\(([^)]*)\)/.exec(cs.clipPath);
+        if (!m) return 1;                       // no clip at all
+        const parts = m[1].trim().split(/\s+/);
+        const px = (v, basis) => (v.endsWith('%') ? (parseFloat(v) / 100) * basis : parseFloat(v) || 0);
+        const [top, right = top, , left = right] = parts;
+        return Math.max(0, (r.width - px(right, r.width) - px(left, r.width)) / (r.width || 1));
+      })();
+      return {
+        text: line.textContent.trim(),
+        clip: cs.clipPath,
+        shown,
+        classes: line.parentElement.className,
+        settled: line.parentElement.classList.contains('tantu-baluchari-done'),
+        color: cs.color,
+        bg: getComputedStyle(document.querySelector('[role=dialog]')).backgroundColor,
+        w: Math.round(r.width), h: Math.round(r.height),
+      };
+    };
+
+    for (const mode of [
+      { label: 'reduced motion', opts: { reducedMotion: 'reduce' }, settleMs: 300, settledNow: true },
+      /* Forced colors says nothing about motion, so this one is read after the
+         sweep would have finished — it is asking about contrast, not timing. */
+      { label: 'forced colors', opts: { forcedColors: 'active' }, settleMs: 2700, settledNow: false },
+    ]) {
+      const { ctx, page } = await open({ config: false, ...mode.opts });
+      await toFirstEverTrial(page);
+      await page.waitForTimeout(mode.settleMs);
+      const m = await page.evaluate(CLIP);
+      await ctx.close();
+      assert(m.text === WELCOME, `${mode.label}: the panel holds "${m.text}"`);
+      assert(m.w > 40 && m.h > 8, `${mode.label}: the line has no box (${m.w}×${m.h})`);
+      assert(
+        m.shown > 0.99,
+        `${mode.label}: only ${Math.round(m.shown * 100)}% of the line is painted after `
+        + `${mode.settleMs}ms (clip-path: ${m.clip}). The sentence is the content and the sweep is `
+        + 'decoration; content is not gated behind an animation finishing.',
+      );
+      assert(m.color !== m.bg, `${mode.label}: the line is the same colour as its panel (${m.color})`);
+      /* The painted-width assertion above cannot go red under reduced motion in
+         this browser: Chromium's reduced-motion emulation lands a running CSS
+         animation on its end frame straight away, so the line looks settled
+         even when the component's own reduced-motion branch is broken. The
+         settled class is the part that is actually load-bearing — it is what
+         holds the clip open across a later re-render, once the animation's
+         fill is gone — and it is observable, so it is what is asserted. */
+      if (mode.settledNow) {
+        assert(
+          m.settled,
+          `${mode.label}: the line is not in its settled state after ${mode.settleMs}ms `
+          + `(classes: "${m.classes}"). Reduced motion is meant to skip the sweep and hold the `
+          + 'line open, not to run the sweep and rely on its fill.',
+        );
+      }
+    }
+  });
+
+  await t('a browser with no speech synthesis, or one that refuses, changes nothing on the glass', async () => {
+    /* voice.js is feature-detected and swallows its own failures. Both halves
+       are reachable: Firefox on some platforms has no synthesis at all, and a
+       browser can expose it and throw on speak(). Neither may reach the page
+       as an error, and neither may cost the Seeker the written line. */
+    for (const speech of ['absent', 'throws']) {
+      const { ctx, page, errors } = await open({ config: false, speech });
+      await toFirstEverTrial(page);
+      const shown = await page.evaluate(() => document.querySelector('.tantu-baluchari-line')?.textContent.trim());
+      assert(shown === WELCOME, `speech ${speech}: the written line is "${shown}"`);
+      await page.getByRole('button', { name: 'Begin' }).click();
+      await page.waitForTimeout(300);
+      assert(await welcome(page).count() === 0, `speech ${speech}: Begin did not dismiss the welcome`);
+      assert(errors.length === 0, `speech ${speech}: the page threw — ${errors.join(' / ')}`);
+      await ctx.close();
+    }
+    /* And where synthesis does work, it is asked for exactly the written line,
+       once. Never through AudioEngine — a cue inside the world is subject to
+       the near-inaudible mix, and this sentence is chrome. */
+    const { ctx, page } = await open({ config: false });
+    await toFirstEverTrial(page);
+    const spoke = await page.evaluate(() => window.__spoke);
+    await ctx.close();
+    assert(
+      spoke.length === 1 && spoke[0] === WELCOME,
+      `speech was asked for ${JSON.stringify(spoke)} rather than the line, once`,
+    );
   });
 
   /* ------------------------------------------------------------------ */
@@ -1104,21 +1550,44 @@ try {
 }
 
 /**
- * Level 1: find the draft by sweeping the circle and reading the orb's own
- * alignment scale, then hold. The keyboard turns 8° a press and the tolerance
- * is 14°, so the best of a full sweep is always inside it.
+ * Level 1: find the draft by sweeping the circle, then hold. The keyboard
+ * turns 8° a press and the tolerance is 14°, so the best of a full sweep is
+ * always inside it.
+ *
+ * The sweep used to be steered by the orb's inline `scale()` — the continuous
+ * alignment reading — and that reading has been removed on purpose, so this
+ * climbs `.snd-breath-word` instead: the four-rung ladder level 1 still
+ * publishes (listening / faint / closer / here). Coarser, and enough, because
+ * the rungs are thresholds on the same `align` the removed scale carried.
+ * A harness with no ears has to read *some* visible channel; if this one goes
+ * too, level 1 becomes undriveable from a test and this helper is where that
+ * shows up first.
  */
+/**
+ * Clear the one-time welcome if this device has never played before. A trial
+ * played *through* the welcome is a different measurement — the group above
+ * takes that one deliberately — so anything here that means to measure play
+ * gets past it first.
+ */
+async function pastTheWelcome(page) {
+  const panel = page.locator('[role=dialog].snd-welcome');
+  if (await panel.count() === 0) return;
+  await page.getByRole('button', { name: 'Begin' }).click();
+  await panel.waitFor({ state: 'detached', timeout: 4000 });
+}
+
 async function holdLevelOne(page) {
-  const scale = () => page.evaluate(() => {
-    const m = /scale\(([\d.]+)\)/.exec(document.querySelector('.snd-orb').style.transform);
-    return m ? Number(m[1]) : 0;
-  });
-  let best = { s: -1, i: 0 };
+  const rung = () => page.evaluate(() => document.querySelector('.snd-breath-word')?.textContent ?? '');
+  let best = { r: -1, i: 0 };
   for (let i = 0; i < 45; i++) {
-    const s = await scale();
-    if (s > best.s) best = { s, i };
+    const r = LEVEL_ONE_RUNGS[await rung()] ?? -1;
+    if (r > best.r) best = { r, i };
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(40);
+  }
+  if (best.r < 0) {
+    throw new Error('level 1 published no alignment word at any bearing in a full sweep — '
+      + 'the harness has no channel left to steer by');
   }
   for (let i = 0; i < 45 - best.i; i++) {
     await page.keyboard.press('ArrowLeft');
