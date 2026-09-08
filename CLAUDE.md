@@ -132,6 +132,66 @@ tick is a progress bar with marks on it; an *unpredictable* one is the reward
 schedule pillar 3 refuses. Don't add a stinger, a sound, or randomness to
 them, and don't make the reward vary — the point is legibility, not surprise.
 
+**The orb no longer shows alignment, and that removal was the point.** It used
+to render `scale(orbScale)`/`orbOpacity` every frame, a continuous, zero-
+latency, hardware-independent readout of the exact `align` value every level
+is built on — not a shortcut a sighted player could take, but strictly the
+*better* sensor: no threshold, no equal-loudness tilt, no HRTF front/back
+ambiguity. The trained-ear premise only survived because players volunteered
+not to look at it. `GameScreen`'s orb div carries no inline style now; Force
+signature motion (drift, flicker, the rest) stays exactly where it was, on the
+pseudo-elements and in `filter`, untouched. `orb.notice` — a discrete flag for
+a false rhythm or an overheat — is unaffected; it was never the problem.
+
+What replaces the signal, once, is `WELCOME_LINE`: the first trial any Seeker
+ever enters shows a `TantuDialog` with the line woven in via Tantu's
+`BaluchariReveal` and spoken once via the Web Speech API (`src/engine/voice.js`
+— deliberately not routed through `AudioEngine`; it is chrome talking to a
+Seeker who has not entered the world's own audio yet, not a cue inside it).
+Second person, not first — this game has no narrator character anywhere in its
+fiction, and inventing one for a single line would be more world than was
+asked for. `speakOnce` is feature-detected and silent on failure; a Seeker with
+no speech synthesis gets the woven line alone, which is why the words carry
+the message and the voice is a bonus.
+
+A real design idea was raised alongside this and deliberately deferred rather
+than built here: an orb whose "battery" could visibly run low, urgency-flavoured,
+on a countdown. That is a genuine fail-state/timer, and levels 1–10 are not
+allowed one — see above. It belongs in the Third Narrowing, where CLAUDE.md
+already says urgency is deliberately introduced, not in the first level anyone
+ever plays. Noted here so the idea isn't lost, not because it was wrong.
+
+The welcome is a real `TantuDialog`, `aria-modal="true"`, and the trial
+behind it must actually be inert while it's up — this did not hold on first
+ship. `GameScreen`'s mount effect starts `level.init`, the frame loop and a
+window `keydown` handler unconditionally, none of it originally aware the
+dialog existed, so a Seeker could steer and cross the first presence mark
+with the panel still covering the orb the mark's dye front draws from. Both
+the frame loop and `onKeyDown` now check a `showWelcomeRef` (a ref, because
+both closures are set up once at mount and a plain `showWelcome` read there
+would be stale) and no-op while it's true. If you add another way into the
+level — another listener, another effect that reaches `level.update` or
+`steering` — gate it the same way, or the welcome stops being modal in
+substance even though it still is in markup. Dismissal also explicitly
+refocuses the game screen (`screenRef`, `tabIndex={-1}`): `TantuDialog`
+returns focus to whatever it captured on open, which at mount is already
+`<body>`, so without this a keyboard Seeker is dropped outside the screen
+on Begin. And `BaluchariReveal` is left at its default `announce` — the
+dialog's `aria-label` names the sentence once, on arrival, and cannot be
+asked for again, while the drawn line is permanently `aria-hidden`;
+`announce`'s `role="status"` copy is what makes the sentence reachable a
+second time.
+
+**`BaluchariReveal` lives in Tantu, not in this repo**, on the same reasoning
+as everything else in "The UI runs on Tantu" above: a text-weave primitive
+that presumed a vocabulary or a tone would not be reusable, so it was built
+upstream (`aiweave`, `src/tantu/components/BaluchariReveal.tsx`) rather than
+duplicated here. It shipped as part of `@weaveaijs/tantu@0.4.0`, published to
+the registry after aiweave's `release.yaml` — which that workflow's own
+comments describe as "a deliberate human action" — was run by hand. This
+repo's `package.json` now depends on `^0.4.0`; a fresh `npm install` resolves
+`BaluchariReveal` with no workaround.
+
 **Level 1 is easier the very first time anyone plays it.** `state.onboarding`
 is true only for the first trial a Seeker ever *enters*, and level 1 uses it to
 seed the draft 28–52° away instead of anywhere in the circle. It changes an
@@ -331,10 +391,16 @@ level rather than an emergent property of set arithmetic.
 `constants.js` always promised a perceptual channel per Force; `game.css`'s
 `[data-force]` block is where they finally live — a drifting wisp, a flicker,
 a swell, device haptics for Mass, echo rings for Void. One rule when editing
-them: **never animate `transform` or `opacity` on `.snd-orb`.** Those two
-carry the live alignment reading as inline styles, and a CSS animation
-outranks an inline declaration — animating them silently overwrites the
-feedback the level is built on. Motion goes on the pseudo-elements.
+them: **motion goes on the pseudo-elements, never on `.snd-orb` itself.**
+This used to matter because `transform`/`opacity` on `.snd-orb` carried the
+live alignment reading as inline styles, and a CSS animation outranks an
+inline declaration — animating them silently overwrote the feedback the
+level was built on. That reading is gone now (see "The orb no longer shows
+alignment" above), so the old failure mode can't recur, but the split still
+stands: `.snd-orb` is the element `answerMark()` measures the screen
+position of for the presence-mark dye front, and putting motion on the
+pseudo-elements keeps that geometry stable regardless of what a Force
+signature is doing visually.
 
 ## Hand UI work to QA
 

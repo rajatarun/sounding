@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { TantuButton, TantuMeter, SikkuKolamLoader } from '@weaveaijs/tantu';
+import { TantuButton, TantuMeter, SikkuKolamLoader, TantuDialog, BaluchariReveal } from '@weaveaijs/tantu';
 
 import { TRIAL_AUDIO_SCALE, PRESENCE_MARKS, MARK_REARM } from '../engine/constants.js';
 import { useSubstrate } from '../components/LoomSubstrate.jsx';
+import { speakOnce } from '../engine/voice.js';
 
 /**
  * Cumulative-presence marks that the loom answers, and the fall-back needed
@@ -15,6 +16,27 @@ const REARM = MARK_REARM;
 
 /** How long the completion beat holds the screen before the end card. */
 const BEAT_MS = 2100;
+
+/**
+ * The one line this game says out loud, and only once — the first time any
+ * Seeker ever enters a trial, gated on the same `firstEver` flag level 1
+ * already uses to soften its opening (see `state.onboarding` in
+ * first-narrowing.js). It exists because the orb used to answer that
+ * question itself: `setOrb(align)` drove scale and opacity directly, a
+ * continuous, zero-latency, hardware-independent readout of the exact
+ * scalar every level is built on. A sighted player watching it wasn't
+ * taking a shortcut — they were using the more reliable sensor — and the
+ * trained-ear premise only survived because players volunteered not to
+ * look. The orb no longer carries that signal (see the render below); this
+ * line is what replaces it, once, as an explicit acknowledgment rather than
+ * a visual crutch nobody was told about.
+ *
+ * Second person, not first — no narrator character is established anywhere
+ * in this game's fiction, and inventing one for a single line risks reading
+ * as more world than was asked for. Kept short: it is spoken AND woven in
+ * text at once, and neither should outlast the other by much.
+ */
+const WELCOME_LINE = 'There is nothing here to see. Only to hear. Breathe, and listen.';
 
 function headingTextFor(steering) {
   const r = steering.relativeYaw;
@@ -37,6 +59,11 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const [breatheHeld, setBreatheHeld] = useState(false);
   const [depth, setDepth] = useState(0);
   const [finishing, setFinishing] = useState(null);
+  // Shown once, only for the very first trial any Seeker ever enters. Not
+  // re-derived from `firstEver` on every render — `firstEver` describes the
+  // trial being entered, and once dismissed this stays dismissed even though
+  // that prop does not change for the rest of this mount.
+  const [showWelcome, setShowWelcome] = useState(firstEver);
 
   const levelStateRef = useRef({});
   const runningRef = useRef(false);
@@ -46,12 +73,39 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const flashTimeoutRef = useRef(null);
   const dragzoneRef = useRef(null);
   const orbRef = useRef(null);
+  const screenRef = useRef(null);
   const commitRef = useRef(() => {});
   const markRef = useRef(0);
+  // Read inside the frame loop and the window keydown handler, both set up
+  // once in the mount effect below and closed over `showWelcome` at that
+  // moment only — a ref is what lets them see it change.
+  const showWelcomeRef = useRef(firstEver);
+  useEffect(() => { showWelcomeRef.current = showWelcome; }, [showWelcome]);
 
   const substrate = useSubstrate();
   const force = level.force.name.toLowerCase();
   const isMass = level.force.name === 'Mass';
+
+  // Speaks WELCOME_LINE once, independent of and in addition to the woven
+  // text — never through AudioEngine, see voice.js for why. Feature-detected
+  // and silent on failure; a Seeker with no speech synthesis, or one who has
+  // denied it, still gets the woven line dismissWelcome() below reacts to.
+  useEffect(() => {
+    if (!showWelcome) return undefined;
+    const spoken = speakOnce(WELCOME_LINE);
+    return () => spoken.stop();
+  }, [showWelcome]);
+
+  function dismissWelcome() {
+    setShowWelcome(false);
+    // TantuDialog restores focus to whatever was focused when it opened —
+    // and it opens at mount, one commit after the briefing screen's own
+    // button has already unmounted, so what it captured was <body>. Left
+    // alone, dismissing hands focus back to <body> and a keyboard Seeker is
+    // standing outside the screen. Deferred one tick so this runs after that
+    // restoration rather than racing it.
+    setTimeout(() => screenRef.current?.focus(), 0);
+  }
 
   useEffect(() => {
     const state = levelStateRef.current;
@@ -130,6 +184,15 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
 
     function frame(ts) {
       if (!runningRef.current) return;
+      if (showWelcomeRef.current) {
+        // The trial does not run behind the welcome — see the dialog's own
+        // comment below. Held at frame 0 rather than merely un-advanced, so
+        // the first real frame after dismissal starts clean instead of
+        // charging a multi-second dt for time the Seeker spent reading.
+        lastFrameRef.current = 0;
+        rafRef.current = requestAnimationFrame(frame);
+        return;
+      }
       if (!lastFrameRef.current) lastFrameRef.current = ts;
       const dt = Math.min((ts - lastFrameRef.current) / 1000, 0.1);
       lastFrameRef.current = ts;
@@ -152,7 +215,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     commitRef.current = tryCommit;
 
     function onKeyDown(e) {
-      if (!runningRef.current) return;
+      if (!runningRef.current || showWelcomeRef.current) return;
       if (e.key === 'ArrowLeft') steering.turn(-8);
       if (e.key === 'ArrowRight') steering.turn(8);
       if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') tryCommit();
@@ -200,9 +263,6 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     };
   }
 
-  const orbScale = (0.78 + orb.strength * 0.42).toFixed(3);
-  const orbOpacity = (0.4 + orb.strength * 0.5).toFixed(2);
-
   if (finishing) {
     return (
       <div className="snd-screen snd-screen-game snd-beat" data-force={force}>
@@ -225,7 +285,13 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     // layout needs them. It used to hang off `.snd-voidfield`, which pinned the
     // presence meter inside a full-viewport field and left it to fend for
     // itself against the controls — which it lost, by 62–72%.
-    <div className="snd-screen snd-screen-game" data-force={force} data-depth={depth}>
+    <div
+      ref={screenRef}
+      tabIndex={-1}
+      className="snd-screen snd-screen-game"
+      data-force={force}
+      data-depth={depth}
+    >
       {/* What the player's hands are doing. It read "steering · swipe" on the
           two breathe levels, which have no steering at all — the same gate
           this screen kept getting wrong in the other direction. */}
@@ -252,12 +318,55 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
           </div>
         )}
         <div className="snd-breath-word">{word}</div>
-        <div
-          ref={orbRef}
-          className={`snd-orb${orb.notice ? ' snd-orb-notice' : ''}`}
-          style={{ transform: `scale(${orbScale})`, opacity: orbOpacity }}
-        />
+        {/* No longer scaled or faded by `orb.strength`. It used to be:
+            `style={{ transform: scale(orbScale), opacity: orbOpacity }}`, a
+            continuous, zero-latency, hardware-independent readout of the
+            exact alignment value every level is built on — a strictly
+            better instrument than the audio itself, with none of its
+            thresholds or HRTF ambiguity. A sighted player watching it solve
+            a level by eye wasn't cheating; they were reading the more
+            reliable sensor. See WELCOME_LINE above for what replaces the
+            signal this removes. `orb.notice` is unaffected — it is a
+            discrete flag (a false rhythm, an overheat), not a continuous
+            reading, and CLAUDE.md's Force-signature motion on this element's
+            pseudo-elements is likewise untouched. */}
+        <div ref={orbRef} className={`snd-orb${orb.notice ? ' snd-orb-notice' : ''}`} />
       </div>
+
+      {/* Shown once, ever — see WELCOME_LINE above. A real TantuDialog rather
+          than a hand-rolled scrim: this project has already shipped a focus-
+          trap defect on its one other modal moment (the account screen's
+          delete confirmation), and that is exactly the class of bug a proven
+          primitive avoids. Not `persistent` — Escape and a scrim tap both
+          dismiss it, alongside the button, because nothing here is
+          destructive and this era's whole premise is that the Seeker cannot
+          lose; nothing should trap them on the way in either. */}
+      {/* No `title` — a heading above the woven line would fight the reveal
+          it introduces. `aria-label` gives the dialog its accessible name
+          instead, so it is announced immediately rather than left unnamed. */}
+      <TantuDialog
+        open={showWelcome}
+        onClose={dismissWelcome}
+        aria-label={WELCOME_LINE}
+        className="snd-welcome"
+      >
+        {/* The dialog's own aria-label announces the sentence once, the
+            moment focus lands — but a name is given on arrival and cannot be
+            asked for again, and BaluchariReveal's drawn line is permanently
+            aria-hidden. Without `announce`, a Seeker who has already moved
+            past that first announcement and comes back to browse the panel
+            finds only "Begin". Left at its default (true) so the role="status"
+            copy BaluchariReveal leaves behind once the sweep finishes is the
+            second, reachable place this sentence lives. */}
+        <BaluchariReveal className="snd-welcome-line" durationMs={2200}>
+          {WELCOME_LINE}
+        </BaluchariReveal>
+        <div className="snd-btnrow">
+          <TantuButton variant="secondary" bleed={false} onClick={dismissWelcome}>
+            Begin
+          </TantuButton>
+        </div>
+      </TantuDialog>
 
       {/* One stack, so the reading and the controls cannot land on each other.
           These were three absolutely-positioned strips at 120px, 96px and
