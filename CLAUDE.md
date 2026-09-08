@@ -405,6 +405,17 @@ trial scaling and moving the panner — which is where every audio defect in thi
 project came from. The contract treats a direct `audio.bus` connection and a
 `positionPanner` move as errors.
 
+If the level's own space needs a voice — a drip, a settling rock, the floor of
+an enclosure — that is `audio.room()`, not a hand-built loop of `burst()` calls.
+It routes beds through `ambient()` and events through `burst()` so the trial
+scaling and reference plane are owned the same way, and its `update` takes only
+the transport time: a room has no way to see alignment, presence or hold, so it
+cannot be made to answer a presence mark or arrive because the Seeker did
+something. Not every level should have one — see the room block at the top of
+`first-narrowing.js` for which five of the first ten do and why the other five
+deliberately don't. A room's level is bounded by `ROOM_CEILING` in
+`constants.js` and measured by `npm run test:audio`, not chosen by ear.
+
 Match the era's contract. A First or Second Narrowing level must not be able to
 fail; `npm run check` now enforces that rather than trusting the comment.
 Note it can only catch the letter: level 9 shipped an ember burst on overheat
