@@ -46,6 +46,17 @@ the Seeker was calibrating against a sound the game never makes. It now runs
 through `AudioEngine.calibrationTone`, on the game's own chain. Nothing got
 louder; the reference got honest. Keep it that way.
 
+**A gain constant is not a level.** The engine's numbers are nominal; what
+reaches the ear is nominal gain *after* the filter shape, and on broadband
+noise those differ by a lot. Level 1 is the worked example: aligned it computes
+to 20.3 dB above the calibration reference, and it renders at **15.9 dB**,
+because alignment also narrows the draft's bandpass from Q 0.6 to Q 3.8 and a
+narrowing constant-peak bandpass gives back about 6 dB. So `timbre()` is not
+the "level-invariant channel" its docstring claims, and any statement about
+this mix has to be rendered and read rather than multiplied out. `npm run
+test:audio` does the rendering; it prints the figures rather than asserting
+them, because they are provisional like everything else in `constants.js`.
+
 **Every sound sits on one reference plane, and radius 6 defines it.**
 `makePanner` uses an inverse distance model with `refDistance: 1`, so a voice
 placed at `REFERENCE_RADIUS` (6) is attenuated by a flat 1/6 — about -15.6 dB —
@@ -256,11 +267,12 @@ docs/LEVELS.md                   the 100-level blueprint
 
 ### Scaling to a hundred
 
-Two commands stand between a new level and the defects the first ten shipped:
+Three commands stand between a new level and the defects the first ten shipped:
 
 ```bash
-npm run check   # the level contract; errors block, warnings ask
-npm test        # proves the contract still catches what it claims to
+npm run check       # the level contract; errors block, warnings ask
+npm test            # proves the contract still catches what it claims to
+npm run test:audio  # renders the real graph and measures what comes out
 ```
 
 The registry is the only thing that imports an era module, so adding a block
@@ -402,6 +414,17 @@ called that. That one is on the author.
 ---
 
 ## Known limits
+
+**Nothing automated here has ever heard the game.** `npm run test:audio`
+renders the engine's real graph through Chromium's Web Audio — HRTF included —
+and measures the samples, so it can say a source is 3.5 dB louder in the right
+ear, that a burst at radius 1 is not 15.6 dB hot, and that turning right
+centres a source on the right. It cannot say whether any of it is *audible*,
+whether the spatial image reads as a direction, or whether the quietness lands
+as tension rather than as a broken build. Front-to-back separation measures
+1.4 dB and a timbre change, which is thin and is the one number most likely to
+fail an ear. A green audio run is a floor. `docs/DESIGN.md`'s requirement — a
+quiet room, real headphones, a phone — is unchanged and unmet.
 
 **AirPods head tracking is not available to web pages.** Apple exposes
 `CMHeadphoneMotionManager` only to native iOS. The current build uses the

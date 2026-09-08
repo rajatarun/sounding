@@ -64,8 +64,17 @@ export class Steering {
     // orientation is always "forward" regardless of which way they're facing.
     let delta = h - this._lastHeading;
     delta = ((delta + 180) % 360 + 360) % 360 - 180;
+
+    // The deadzone gates *displacement*, not rate — and it used to gate rate,
+    // because `_lastHeading` advanced before this check. A sub-threshold delta
+    // was thrown away AND became the new reference, so at a 60 Hz event rate a
+    // rotation slower than about 4.8 deg/s produced no yaw at all, forever.
+    // This game's whole instruction is "turn slowly", and its tolerances are
+    // 13-20 degrees. Holding the reference instead lets a slow turn accumulate
+    // until it crosses the threshold, while jitter that oscillates around a
+    // point still never does.
+    if (Math.abs(delta) < 0.08) return;
     this._lastHeading = h;
-    if (Math.abs(delta) < 0.08) return; // deadzone: sensor jitter
     this.turn(delta);
   }
 
@@ -90,6 +99,13 @@ export class Steering {
     const cYaw = Math.cos(x);
     const Vx = -cZ * sY - sZ * sX * cY;
     const Vy = -sZ * sY + cZ * sX * cY;
+    // A phone lying flat has beta and gamma at zero, which collapses both
+    // components to zero: atan2(0, 0) is 0, not NaN, so this used to report
+    // "due north" for every alpha and the caller's `360 - alpha` fallback
+    // could never fire. Degenerate is not a heading; say so and let the
+    // fallback answer.
+    if (Math.abs(Vx) < 1e-9 && Math.abs(Vy) < 1e-9) return NaN;
+
     let heading = Math.atan2(Vx, Vy);
     if (heading < 0) heading += 2 * Math.PI;
     return heading * (180 / Math.PI);
