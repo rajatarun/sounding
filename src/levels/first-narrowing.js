@@ -38,6 +38,119 @@ import { DISCIPLINES, FORCES, DEPTHS } from '../engine/constants.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/* ── The room ───────────────────────────────────────────────────────────────
+ *
+ * The space a level stands in, distinct from the thing it is listening for.
+ * Built with `audio.room()`, which routes beds through `ambient()` and events
+ * through `burst()`, so the trial scaling and the reference plane are owned
+ * for these the same way they are for a cue.
+ *
+ * NOT EVERY LEVEL GETS ONE, and that is the point. A forge does not drip and
+ * a frozen clearing does not rumble like limestone, so a bed that suits level
+ * 1 contradicts level 6's own briefing. Five levels carry a room; five
+ * deliberately do not, each for a reason written at the level.
+ *
+ * THE LEVELS ARE MEASURED, NOT CHOSEN BY EAR. A gain constant does not predict
+ * a level on a broadband source — that is the lesson already written into
+ * `calibrationTone`'s docstring — so every number below was rendered through
+ * the real graph and read back, in dB relative to the calibration reference
+ * (the tone the Seeker sets their volume against, so 0 dB here is roughly
+ * "just audible" at the level they chose). The yardsticks:
+ *
+ *   level 1's aligned draft        +15.9 dB   the cue at its loudest
+ *   the calibration reference        0.0 dB   just audible, by construction
+ *   level 1's misaligned floor      -5.9 dB   the cue at its quietest
+ *
+ * ROOM_CEILING in constants.js says how far under those a room must sit, and
+ * `npm run test:audio` holds the line. What is shipped here sits well below
+ * both ceilings, because a ceiling is a bound and this is a design choice.
+ *
+ * ONE THING THE MEASURING TURNED UP that is worth knowing before re-tuning
+ * any of this: an identical event spec measures 11.7 dB under the aligned cue
+ * at one bearing and 14.1 dB at another, purely from the HRTF. So a room's
+ * level is really a band about 2.5 dB wide, decided by where a trial happens
+ * to put its drip points, and every figure below is one sample from that band
+ * rather than a constant. It is also why the margins here are generous: a
+ * ceiling that a spec clears by 2 dB is a ceiling it does not clear.
+ *
+ * A NOTE ON THE BED, said out loud rather than buried. STONE is set 4 dB below
+ * level 1's misaligned floor, which is about 10 dB below the calibration
+ * reference — so on phone earbuds, which mostly cannot reproduce 85 Hz at all,
+ * it will not be audible. It could be roughly 8 dB louder without masking any
+ * cue in this file, because an 85 Hz bed and a 300-460 Hz draft do not share
+ * an auditory filter and masking is spectrally local. That argument is real,
+ * but it is a mitigation and not an exemption: the rule as written is
+ * broadband, and a bed at that level would sit ABOVE the cue's misaligned
+ * floor — the room would be the loudest thing in the mix at the exact moment
+ * the design wants near-silence. Widening the rule to a per-band one is a
+ * decision about the pillar and belongs to the owner, so the bed stays under
+ * the broadband rule and the low end stays honest rather than impressive.
+ */
+
+/**
+ * The floor of an enclosed space. Sub-bass, so it is felt as enclosure rather
+ * than heard as a sound, and so it stays clear of every cue band in this file.
+ * Measured: 4.1 dB below level 1's misaligned floor, about -10.0 dB against
+ * the calibration reference.
+ */
+const STONE = { color: 'brown', filterType: 'lowpass', freq: 85, Q: 0.7, gain: 0.015 };
+
+/**
+ * The same floor, opened out — a valley has one too, and it is bigger.
+ * Measured 4.7 dB below level 1's misaligned floor.
+ */
+const VALLEY = { color: 'brown', filterType: 'lowpass', freq: 70, Q: 0.7, gain: 0.015 };
+
+/**
+ * Water, falling somewhere else in the room.
+ *
+ * Two drip points rather than one, because one is a metronome and two that
+ * never divide into each other are a place. They differ in SPECTRUM, not in
+ * level: distance is a spatial statement in this engine and `referenceTrim`
+ * exists precisely to stop it writing to the level channel, so a further drip
+ * is duller, not quieter. NEAR is a tight small pool, DEEP a wider one.
+ *
+ * Measured over a 50 ms window, against level 1's aligned draft: NEAR lands
+ * between -11.7 and -14.1 dB and DEEP between -13.3 and -17.3, the spread
+ * being bearing rather than tuning. Even at the loudest placement that is
+ * nearly twice the headroom ROOM_CEILING asks for.
+ */
+const DRIP_NEAR = {
+  color: 'white', filterType: 'bandpass', freq: 1900, Q: 9, dur: 0.13, attack: 0.004, gain: 0.25,
+};
+const DRIP_DEEP = {
+  color: 'white', filterType: 'bandpass', freq: 1150, Q: 9, dur: 0.18, attack: 0.006, gain: 0.26,
+};
+
+/**
+ * Rock, settling. The rumble the ask named, and the reason it is an event
+ * rather than a bed: a 2.6 s swell every minute or so occupies about 4% of the
+ * time, so it can be genuinely present without ever being what the Seeker is
+ * listening through. Slow attack — it arrives, it does not strike.
+ *
+ * Measured 13.3 to 14.5 dB under the aligned cue over a 50 ms window. Judged
+ * by the event rule rather than the bed rule, which is the one place that
+ * distinction is doing real work: at 2.6 seconds it is long enough to argue
+ * either way, and it is bounded like an event because it is bounded by its
+ * duty cycle, not by sitting under the cue forever.
+ */
+const SETTLE = {
+  color: 'brown', filterType: 'lowpass', freq: 90, Q: 0.7, dur: 2.6, attack: 0.9, gain: 0.05,
+};
+
+/**
+ * Where the room's fixed points are. Uniform over the whole circle, on purpose
+ * and against the instinct to keep them away from the source: a drip barred
+ * from the draft's neighbourhood tells the Seeker where the draft is not,
+ * which is an assist, and level 1 has exactly one sanctioned assist already.
+ * Uniform is the only placement that leaks nothing in either direction.
+ *
+ * Fixed for the trial rather than redrawn per firing, because drip points do
+ * not move, and because a room that stays put is one that rewards learning it.
+ */
+const roomBearing = () => Math.floor(Math.random() * 360);
+
+
 export const FIRST_NARROWING = [
   {
     id: 1,
@@ -86,6 +199,20 @@ export const FIRST_NARROWING = [
         s.sourceAngle = Math.floor(Math.random() * 360);
       }
       s.hold = 0;
+      // The cave the briefing opens in, finally audible as a cave: a sub-bass
+      // floor, two drip points, and rock settling somewhere out of reach. None
+      // of it is gated by alignment or by presence — it runs identically at
+      // hold 0 and hold 99, which is what makes it a place rather than a
+      // reward. See the room block at the top of this file for the levels.
+      s.room = audio.room({
+        beds: [STONE],
+        events: [
+          { ...DRIP_NEAR, bearing: roomBearing(), every: [8, 15] },
+          { ...DRIP_DEEP, bearing: roomBearing(), every: [11, 21] },
+          // Rare enough that a Seeker may finish a trial without hearing one.
+          { ...SETTLE, bearing: roomBearing(), every: [45, 95] },
+        ],
+      });
       s.voices = [
         // The draft itself.
         audio.voice(s.sourceAngle, { color: 'brown', filterType: 'bandpass', freq: 420, Q: 0.7, gain: 0 }),
@@ -98,6 +225,7 @@ export const FIRST_NARROWING = [
     },
 
     update(s, dt, t, ctx) {
+      s.room.update(t);
       const align = alignment(ctx.yaw, s.sourceAngle);
       const now = ctx.audio.ctx.currentTime;
 
@@ -133,6 +261,11 @@ export const FIRST_NARROWING = [
       if (s.hold >= 100) ctx.complete();
     },
 
+    cleanup(s) {
+      if (s.room) s.room.stop();
+      if (s.voices) s.voices.forEach((v) => { try { v.src.stop(); } catch (e) { /* stopped */ } });
+    },
+
     completionText: () => ({
       text: 'A thread of cold, clean air brushes your face. You stayed with it long enough for the dark to open.',
       sub: 'Presence held.',
@@ -162,6 +295,13 @@ export const FIRST_NARROWING = [
       'When you sense a rhythmic presence, turn toward it and acknowledge it. ' +
       'If you are mistaken, nothing is lost — simply keep listening.',
 
+    // NO ROOM LAYER, deliberately. This level is an impulse-discrimination
+    // task — telling a true rhythm from ambient noise — and a room that drips
+    // adds a third class of impulse to a two-class judgement. That is not
+    // atmosphere, it is a change to the mechanic, and a quieter continuous bed
+    // is no better: the leaf bursts are near threshold by design and anything
+    // continuous under them is a masker of a detection task. The clearing
+    // stays silent between events, which is also what its own briefing says.
     init(s) {
       s.phase = 'idle';
       s.angle = 0;
@@ -262,6 +402,18 @@ export const FIRST_NARROWING = [
       ];
       s.trueIdx = Math.floor(Math.random() * 3);
       s.hold = 0;
+      // A chamber, so the same cave room as level 1 — but sparser. Three
+      // drafts already occupy the band the ear is sorting through here, and
+      // the discrimination is between continuous voices, so a drip competes
+      // with nothing; it just has less silence to sit in. No settle: this
+      // chamber is busy enough without the rock joining in.
+      s.room = audio.room({
+        beds: [STONE],
+        events: [
+          { ...DRIP_NEAR, bearing: roomBearing(), every: [12, 24] },
+          { ...DRIP_DEEP, bearing: roomBearing(), every: [17, 33] },
+        ],
+      });
       s.voices = s.angles.map((a, i) => {
         const v = audio.voice(a, {
           color: 'brown', filterType: 'bandpass',
@@ -275,6 +427,7 @@ export const FIRST_NARROWING = [
     },
 
     update(s, dt, t, ctx) {
+      s.room.update(t);
       const now = ctx.audio.ctx.currentTime;
       let trueAlign = 0;
 
@@ -307,6 +460,11 @@ export const FIRST_NARROWING = [
       ctx.setWord(aligned ? 'here' : trueAlign > 0.6 ? 'closer' : 'listening');
 
       if (s.hold >= 100) ctx.complete();
+    },
+
+    cleanup(s) {
+      if (s.room) s.room.stop();
+      if (s.voices) s.voices.forEach((v) => { try { v.src.stop(); } catch (e) { /* stopped */ } });
     },
 
     completionText: () => ({
@@ -359,10 +517,24 @@ export const FIRST_NARROWING = [
       const resGain = c.createGain(); resGain.gain.value = 0;
       res.connect(resGain); resGain.connect(audio.nonPositioned); res.start();
 
+      // Drips, and no stone bed. The cave's breath IS this level's low end —
+      // it is the cue, and the Seeker matches their own rhythm to it — so a
+      // second sub-bass layer would sit directly on the channel being read.
+      // The drip intervals are long and irregular against the 5.5-7 s breath
+      // period on purpose: a regular drip inside that range would be a
+      // metronome, and this level's own init note says it must not have one.
+      s.room = audio.room({
+        events: [
+          { ...DRIP_NEAR, bearing: roomBearing(), every: [9, 19] },
+          { ...DRIP_DEEP, bearing: roomBearing(), every: [14, 27] },
+        ],
+      });
+
       s.nodes = { osc, noise, filt, gain, res, resGain };
     },
 
     update(s, dt, t, ctx) {
+      s.room.update(t);
       const now = ctx.audio.ctx.currentTime;
       const target = Math.sin((2 * Math.PI * t) / s.period);
       const matched = (target >= 0) === s.held;
@@ -391,6 +563,7 @@ export const FIRST_NARROWING = [
     onBreathe(s, held) { s.held = held; },
 
     cleanup(s) {
+      if (s.room) s.room.stop();
       if (!s.nodes) return;
       try { s.nodes.osc.stop(); s.nodes.noise.stop(); s.nodes.res.stop(); }
       catch (e) { /* already stopped */ }
@@ -418,13 +591,24 @@ export const FIRST_NARROWING = [
       'simply stay there, unhurried. Feed it steadily, for as long as it takes, ' +
       'and the tribe has its first fire.',
 
-    init(s) {
+    init(s, audio) {
       s.emberAngle = Math.floor(Math.random() * 360);
       s.spark = 0;
       s.lastCrackle = 0;
+      // A blind hollow: the enclosure, and rock settling in it. No drips —
+      // the only cue in this level is a crackle whose RATE and brightness the
+      // Seeker reads, and a random pitched impulse in the same stream is
+      // something that could be counted as a crackle. The settle is safe
+      // beside it because nothing about a 2.6 s low swell resembles a 0.28 s
+      // highpassed tick; it cannot be mistaken for the ember.
+      s.room = audio.room({
+        beds: [STONE],
+        events: [{ ...SETTLE, bearing: roomBearing(), every: [40, 80] }],
+      });
     },
 
     update(s, dt, t, ctx) {
+      s.room.update(t);
       const align = alignment(ctx.yaw, s.emberAngle);
 
       // Crackles quicken and brighten as you face it — the only cue you get.
@@ -455,6 +639,8 @@ export const FIRST_NARROWING = [
       }
     },
 
+    cleanup(s) { if (s.room) s.room.stop(); },
+
     completionText: () => ({
       text: 'The ember catches, flares, and holds. For the first time in this dark, you can see your own hands.',
       sub: 'The tribe has fire.',
@@ -475,6 +661,53 @@ export const FIRST_NARROWING = [
     // Cumulative hold, as a percentage, at which each successive depth
     // (DEPTHS: Shell, Current, Weather, Lattice, Core) reveals itself.
     depthAt: [0, 20, 45, 70, 90],
+
+    /**
+     * Per-layer level trim, and the fix for this level's real defect.
+     *
+     * All five depths shared one gain curve, and a shared gain is not a shared
+     * level: rendered through the real graph at the curve's aligned value
+     * (0.415), the five arrived at +25.9, +14.5, +23.0, -9.2 and +19.8 dB
+     * relative to the calibration reference. That is a 35.1 dB spread across
+     * layers the design intends as one ladder — and the two worst placed are
+     * the ones that matter most. The surface hiss, a white-noise highpass at
+     * 2.6 kHz, is the widest band in the set and sat on top of everything the
+     * briefing promises is underneath it; the Lattice, a crackle bandpassed to
+     * 420 Hz at Q 2, sat 35 dB below the surface and was inaudible in
+     * practice. A Seeker who held for 70% of a 35-second hold to reach the
+     * fourth depth was being answered with silence.
+     *
+     * These trims put the four continuous layers at a common rendered level of
+     * about +9 dB, which is chosen so the whole five-layer stack, fully open
+     * and aligned, sums to +15.3 dB — level 1's aligned draft, to within half a
+     * decibel. So the level gets QUIETER: the fully-open stack drops 13.2 dB
+     * from where it was. Four of these five numbers are reductions. The fifth
+     * is a 13 dB raise on the Lattice, and it is named here rather than
+     * buried: it is not a fix for quietness, which would be forbidden, but for
+     * a layer sitting 35 dB below its own siblings by accident of texture.
+     *
+     * The Lattice is matched on its loudest 50 ms rather than on RMS, because
+     * it is the one impulsive texture here and its crest factor is 8 dB above
+     * the others'. Equalising RMS would have put its clicks 8 dB proud of
+     * every layer around it — the same masking defect, upside down.
+     *
+     * UNVALIDATED, and in a known direction. Equal rendered level is not equal
+     * LOUDNESS: at the quiet reproduction level this game asks for, the 120 Hz
+     * Core will read as considerably softer than the 2.6 kHz Shell even though
+     * they now measure the same. Correcting that needs an equal-loudness
+     * judgement at a real listening level, which means a phone, headphones and
+     * a quiet room. The error runs one way — the deep layers are the quiet
+     * ones — so a future correction lifts the bottom of the ladder, it does
+     * not lower the top again.
+     */
+    depthTrim: [0.143, 0.529, 0.199, 4.5, 0.288],
+
+    // NO ROOM LAYER. The briefing puts this on a frozen clearing, in the open,
+    // on ice — it does not drip and it does not have a cave's stone floor, and
+    // pumping level 1's room in here would contradict the level's own first
+    // sentence. It has no headroom for one either: five depth layers already
+    // fill the spectrum from 120 Hz to the top of the bus, which is exactly
+    // the analysis above.
 
     briefing:
       'Cold has soaked through the ground itself. Somewhere below this frozen ' +
@@ -511,7 +744,10 @@ export const FIRST_NARROWING = [
 
       s.voices.forEach((v, i) => {
         const unlocked = s.hold >= this.depthAt[i];
-        const target = unlocked ? (0.015 + Math.pow(align, 2.6) * 0.4) * ctx.audio.audioScale : 0;
+        // depthTrim is what makes the shared curve a shared LEVEL — see above.
+        const target = unlocked
+          ? (0.015 + Math.pow(align, 2.6) * 0.4) * this.depthTrim[i] * ctx.audio.audioScale
+          : 0;
         v.gain.gain.setTargetAtTime(target, now, i === 0 ? 0.25 : 0.6);
       });
 
@@ -529,6 +765,10 @@ export const FIRST_NARROWING = [
       ctx.setWord(aligned ? words[Math.max(0, depthIdx)] : 'listening');
 
       if (s.hold >= 100) ctx.complete();
+    },
+
+    cleanup(s) {
+      if (s.voices) s.voices.forEach((v) => { try { v.src.stop(); } catch (e) { /* stopped */ } });
     },
 
     completionText: () => ({
@@ -558,6 +798,13 @@ export const FIRST_NARROWING = [
       'covering. When you hear it, let the first go, and mark <b>that</b> ' +
       'instead.',
 
+    // NO ROOM LAYER, and this is the clearest case in the file. A frozen
+    // river does have a room tone — water moving under ice — and it lives at
+    // exactly the frequencies the true cue does: the groan is a lowpass at
+    // 140-200 Hz, and it is deliberately the quieter, later, harder voice.
+    // A bed there would mask the one sound this level asks the Seeker to
+    // prefer over the loud, easy, regular one. Nor can it take impulses: the
+    // whole level is a judgement between two kinds of impulse.
     init(s) {
       s.simpleAngle = Math.floor(Math.random() * 360);
       do {
@@ -667,12 +914,21 @@ export const FIRST_NARROWING = [
       s.hold = 0;
       s.nextCallAt = 2;
       s.pendingTrueAt = null;
+      // A valley, so a floor and nothing else. Sub-bass, well under both cues
+      // (a 500 Hz bandpass drone and a 900 Hz true call), and it gives the
+      // space a size — this is the first level in the file that is a big
+      // outdoors rather than a room. No events of any kind: the level is a
+      // discrimination between an echo and a true call, both impulsive, and
+      // a third impulse from the scenery would be a decoy the design did not
+      // author.
+      s.room = audio.room({ beds: [VALLEY] });
       s.voice = audio.voice(s.trueAngle, {
         color: 'brown', filterType: 'bandpass', freq: 500, Q: 0.7, gain: 0,
       });
     },
 
     update(s, dt, t, ctx) {
+      s.room.update(t);
       const align = alignment(ctx.yaw, s.trueAngle);
       const now = ctx.audio.ctx.currentTime;
 
@@ -712,6 +968,11 @@ export const FIRST_NARROWING = [
       if (s.hold >= 100) ctx.complete();
     },
 
+    cleanup(s) {
+      if (s.room) s.room.stop();
+      if (s.voice) { try { s.voice.src.stop(); } catch (e) { /* stopped */ } }
+    },
+
     completionText: () => ({
       text: 'Under the din of your own voice thrown back at you, one answer comes through clean and small and real. Someone is there.',
       sub: 'The true call found.',
@@ -736,6 +997,10 @@ export const FIRST_NARROWING = [
       'it needs air, release when it’s had enough, and mind that what ' +
       'you bank now, you may pay for later.',
 
+    // NO ROOM LAYER. A forge does not drip and has no stone floor to hear
+    // under it, and more to the point its room tone IS its cue: the fire bed
+    // below is what the Seeker reads temperature from, and any second
+    // broadband layer is a masker of the only channel this level has.
     init(s, audio) {
       s.temp = 20;
       s.held = false;
@@ -820,6 +1085,11 @@ export const FIRST_NARROWING = [
       'finding a place to rest; you are finding it, over and over, for as ' +
       'long as it keeps changing.',
 
+    // NO ROOM LAYER. The squall is the cue and the fire is the second layer;
+    // a third continuous texture is mud. Everything a squall's room would
+    // sound like — rain, gusts in cover, more moving air — is broadband and
+    // lands on top of a broadband moving cue, which is the worst case for
+    // masking in this file.
     init(s, audio) {
       s.threatAngle = Math.floor(Math.random() * 360);
       s.driftVel = (Math.random() * 2 - 1) * 8;

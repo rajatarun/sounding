@@ -129,7 +129,7 @@ async function harness(browser) {
   await page.goto(HARNESS);
 
   await page.evaluate(() => {
-    window.__render = async ({ seconds, sampleRate, seed, windows, buildSrc }) => {
+    window.__render = async ({ seconds, sampleRate, seed, windows, windowMs, buildSrc }) => {
       const mod = await import('/src/engine/audio.js');
 
       const realRandom = Math.random;
@@ -166,6 +166,21 @@ async function harness(browser) {
       };
       const peak = (a) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i])); return m; };
 
+      /* The loudest short window in the render.
+         Masking is a question about a moment, not about an average: a 130 ms
+         drip and a 24-second draft have wildly different full-render RMS and
+         that difference says nothing about whether one covers the other. The
+         window is ~50 ms because that is roughly the ear's integration time,
+         so it is the window in which a transient can mask a steady sound.
+         Hopped at half a window so an event cannot fall across a boundary and
+         measure quiet. */
+      const wLen = Math.max(1, Math.round(sampleRate * (windowMs || 50) / 1000));
+      let maxWin = 0;
+      for (let from = 0; from + wLen <= L.length; from += Math.floor(wLen / 2)) {
+        const v = Math.sqrt((rms(L, from, from + wLen) ** 2 + rms(R, from, from + wLen) ** 2) / 2);
+        if (v > maxWin) maxWin = v;
+      }
+
       const n = windows || 24;
       const step = Math.floor(L.length / n);
       const win = [];
@@ -178,6 +193,7 @@ async function harness(browser) {
       return {
         rmsL: rms(L), rmsR: rms(R), peakL: peak(L), peakR: peak(R),
         rms: Math.sqrt((rms(L) ** 2 + rms(R) ** 2) / 2),
+        maxWin,
         windows: win,
         frames: L.length,
       };
@@ -193,13 +209,13 @@ async function harness(browser) {
      * file — everything it needs comes through `args`, which arrives as a
      * global `A` inside the build.
      */
-    async render(build, { seconds = 1, sampleRate = 48000, seed = 20260908, windows = 24, args = {} } = {}) {
+    async render(build, { seconds = 1, sampleRate = 48000, seed = 20260908, windows = 24, windowMs = 50, args = {} } = {}) {
       const out = await page.evaluate(
         ([opts, a]) => {
           window.A = a;
           return window.__render(opts);
         },
-        [{ seconds, sampleRate, seed, windows, buildSrc: build.toString() }, args],
+        [{ seconds, sampleRate, seed, windows, windowMs, buildSrc: build.toString() }, args],
       );
       if (errors.length) throw new Error(`page error during render: ${errors.join('; ')}`);
       return out;
@@ -208,6 +224,83 @@ async function harness(browser) {
         A test that hardcodes a constant stops testing it the moment it moves. */
     async constants() {
       return page.evaluate(() => import('/src/engine/constants.js').then((m) => ({ ...m })));
+    },
+    /**
+     * What the levels themselves build, read out of the level module.
+     *
+     * The room specs are module-local to `first-narrowing.js` and they should
+     * stay that way, so this spies on `audio.room` and runs each level's real
+     * `init`. What comes back is what the game ships, not a copy of it kept in
+     * a test — the difference is the whole reason the trial-scaling cases read
+     * TRIAL_AUDIO_SCALE from source. The engine here is built on a throwaway
+     * OfflineAudioContext that is never rendered; only the specs are wanted.
+     */
+    async levelData() {
+      const out = await page.evaluate(async () => {
+        const [engineMod, levelMod] = await Promise.all([
+          import('/src/engine/audio.js'),
+          import('/src/levels/first-narrowing.js'),
+        ]);
+        const oc = new OfflineAudioContext(2, 4800, 48000);
+        const realAC = window.AudioContext;
+        window.AudioContext = function () { return oc; };
+        /* Seeded for the same reason the renders are: a level's init draws its
+           room bearings from Math.random, and an HRTF level varies a couple of
+           decibels with bearing. Unseeded, the figures this suite prints would
+           wobble by about the size of the things it is measuring. */
+        const realRandom = Math.random;
+        let seedState = 20260908;
+        Math.random = () => {
+          seedState = (Math.imul(seedState, 1664525) + 1013904223) >>> 0;
+          return seedState / 4294967296;
+        };
+        try {
+          return levelMod.FIRST_NARROWING.map((lv) => {
+            const audio = new engineMod.AudioEngine();
+            audio.init();
+            const specs = [];
+            const realRoom = audio.room.bind(audio);
+            audio.room = (spec) => { specs.push(spec); return realRoom(spec); };
+            const state = { onboarding: false };
+            try { lv.init(state, audio); } catch (e) { /* a level the harness cannot drive */ }
+            return {
+              id: lv.id,
+              name: lv.name,
+              beds: specs.flatMap((sp) => sp.beds || []),
+              events: specs.flatMap((sp) => sp.events || []),
+              depthTrim: lv.depthTrim || null,
+            };
+          });
+        } finally { window.AudioContext = realAC; Math.random = realRandom; }
+      });
+      if (errors.length) throw new Error(`page error: ${errors.join('; ')}`);
+      return out;
+    },
+    /**
+     * Ask the engine a question that is not about samples.
+     *
+     * Some things worth pinning are shape rather than signal — what an
+     * interface will and will not accept. Built on a throwaway
+     * OfflineAudioContext that is never rendered.
+     */
+    async engine(fn, args = {}) {
+      const out = await page.evaluate(
+        async ([src, a]) => {
+          const mod = await import('/src/engine/audio.js');
+          const oc = new OfflineAudioContext(2, 4800, 48000);
+          const realAC = window.AudioContext;
+          window.AudioContext = function () { return oc; };
+          try {
+            const audio = new mod.AudioEngine();
+            audio.init();
+            // eslint-disable-next-line no-eval
+            return eval(`(${src})`)({ audio, mod, args: a });
+          } finally { window.AudioContext = realAC; }
+        },
+        [fn.toString(), args],
+      );
+      if (errors.length) throw new Error(`page error: ${errors.join('; ')}`);
+      return out;
     },
     /** Run something in the page against the steering module, not the audio one. */
     async steering(fn, args = {}) {
@@ -615,6 +708,182 @@ try {
     const full = await at(1);
     const faint = await at(0.5);
     near(dBBetween(faint.rms, full.rms), 0, 0.2, 'the reference under trial-3 scaling');
+  });
+
+  /* ------------------------------------------------------------------ */
+  group('The room: a space that never competes with the cue');
+
+  /* The two yardsticks every room number in this file is quoted against, and
+     the reason they are rendered rather than written down: a gain constant
+     does not predict a level on a broadband source. Level 1's own draft at
+     the two ends of its alignment curve. */
+  const l1 = (gain, freq, Q) => h.render(({ audio }) => {
+    audio.voice(0, { color: 'brown', filterType: 'bandpass', freq: A.freq, Q: A.Q, gain: A.gain });
+  }, { args: { gain, freq, Q }, seconds: 3 });
+  const cueAligned = (await l1(0.52, 340, 3.8)).rms;
+  const cueFloor = (await l1(0.02, 300, 0.6)).rms;
+  const levels = await h.levelData();
+  const withRooms = levels.filter((lv) => lv.beds.length || lv.events.length);
+
+  await t('a room belongs to the space its level is actually in', async () => {
+    /* Pinned deliberately, and it is a design decision rather than a physical
+       fact — which is exactly why it is pinned. "Natural" here has to mean
+       true to THIS space, not cave SFX everywhere: a forge does not drip, a
+       frozen clearing has no limestone floor, and level 7's frozen river
+       cannot take a low bed at all because its true cue is the low, late,
+       quiet voice a bed would bury. Four of the five silent levels are silent
+       because a room would damage a discrimination the level is teaching. If
+       this list changes, someone should have decided to change it. */
+    const ids = withRooms.map((lv) => lv.id);
+    const expected = [1, 3, 4, 5, 8];
+    assert(ids.join() === expected.join(),
+      `levels carrying a room are ${ids.join(', ')} — expected ${expected.join(', ')}`);
+    for (const lv of withRooms) {
+      console.log(`          level ${lv.id} ${lv.name}: ${lv.beds.length} bed(s), ${lv.events.length} event(s)`);
+    }
+  });
+
+  await t('the room cannot see the player', async () => {
+    /* Structural, and the reason it is worth a case: this is the only thing
+       standing between a room layer and the reward schedule pillar 3 refuses.
+       `update` takes the transport time and nothing else, so no room event can
+       be made to answer a presence mark, a hold, or an alignment — not by
+       policy but because the interface has nowhere to put one. Event spacing
+       is drawn from a range, which is a room and not a variable ratio: the
+       randomness is in where the furniture is, and there is no payoff for it
+       to attach to. If a third parameter ever appears here, that changes. */
+    const got = await h.engine(({ audio }) => {
+      const r = audio.room({ beds: [], events: [] });
+      return { arity: r.update.length, keys: Object.keys(r).sort().join(',') };
+    });
+    assert(got.arity === 1, `room().update takes ${got.arity} parameters — it may only take time`);
+    assert(got.keys === 'stop,update', `room() exposes ${got.keys} — expected stop,update`);
+  });
+
+  await t("the room's loudest moment stays under the cue at full alignment", async () => {
+    /* The rule that keeps a drip from becoming the loudest thing in the First
+       Narrowing, which is the shape of a defect this project has already
+       shipped once (the ember burst on error, at radius 1). Measured over
+       ~50 ms rather than over the whole render, because that is the window in
+       which a transient can mask a steady sound; comparing a 130 ms drip's
+       full-render RMS to a draft's would flatter it by an order of magnitude
+       and prove nothing. */
+    const { ROOM_CEILING } = await h.constants();
+    for (const lv of withRooms) {
+      for (const e of lv.events) {
+        const m = await h.render(({ audio }) => { audio.burst(A.e); }, {
+          args: { e: { ...e, angleDeg: e.bearing } }, seconds: Math.max(1, (e.dur || 0.3) + 0.4),
+        });
+        const over = dBBetween(m.maxWin, cueAligned);
+        /* The same spec measures differently at different bearings — the HRTF
+           is worth about 2.5 dB across the circle — so these figures are one
+           sample of a band, not a constant. Deterministic here only because
+           `levelData` seeds the bearings; on a device they are redrawn each
+           trial, which is why the margins are generous. */
+        console.log(`          level ${lv.id} ${e.freq} Hz event: ${over.toFixed(1)} dB against the aligned cue`);
+        assert(over <= -ROOM_CEILING.eventBelowCue,
+          `level ${lv.id}'s ${e.freq} Hz room event is ${over.toFixed(1)} dB from the aligned cue — the ceiling is -${ROOM_CEILING.eventBelowCue}`);
+      }
+    }
+  });
+
+  await t("the room's bed stays under the cue at its quietest", async () => {
+    /* The stricter of the two rules and the one that protects the first minute
+       of level 1. A bed runs continuously, so it is judged against the cue at
+       its WORST — the misaligned floor — and not against the cue at its best.
+       A room louder than the cue in a misaligned moment is a room that has
+       replaced the mechanic with scenery.
+
+       Rendered with an instant ramp rather than `room()`'s 1.5 s fade: the
+       rule is about the bed's steady level, and the fade is a shape. */
+    const { ROOM_CEILING } = await h.constants();
+    for (const lv of withRooms) {
+      for (const b of lv.beds) {
+        const m = await h.render(({ audio }) => { audio.ambient(A.b).level(A.b.gain, 0.001); },
+          { args: { b }, seconds: 3 });
+        const over = dBBetween(m.rms, cueFloor);
+        console.log(`          level ${lv.id} ${b.freq} Hz bed: ${over.toFixed(1)} dB against the misaligned floor`);
+        assert(over <= -ROOM_CEILING.bedBelowFloor,
+          `level ${lv.id}'s ${b.freq} Hz bed is ${over.toFixed(1)} dB from the misaligned floor — the ceiling is -${ROOM_CEILING.bedBelowFloor}`);
+      }
+    }
+  });
+
+  await t('the room gets quieter on later trials, so its headroom is constant', async () => {
+    /* The invariance that makes one measurement cover all three trials. If the
+       room did not scale, trial 3 would quietly hand the room 6 dB of the cue's
+       ground — the cue would recede for "a deeper kind of listening" and the
+       scenery would not. Both halves are checked, because they reach the
+       scaling by different routes: beds through `ambient()`, events through
+       `burst()`. */
+    const { TRIAL_AUDIO_SCALE, ROOM_CEILING } = await h.constants();
+    const trial3 = TRIAL_AUDIO_SCALE[TRIAL_AUDIO_SCALE.length - 1];
+    const spec = withRooms.find((lv) => lv.id === 1);
+    const bedAt = (scale) => h.render(({ audio }) => {
+      audio.setAudioScale(A.scale);
+      audio.room({ beds: [A.b], fade: 0.001 });
+    }, { args: { scale, b: spec.beds[0] }, seconds: 3 });
+    const eventAt = (scale) => h.render(({ audio, at }) => {
+      audio.setAudioScale(A.scale);
+      const r = audio.room({ events: [{ ...A.e, every: [0.1, 0.1] }] });
+      at(0.2, () => r.update(1));
+    }, { args: { scale, e: { ...spec.events[0], bearing: 0 } }, seconds: 1 });
+    near(dBBetween((await bedAt(trial3)).rms, (await bedAt(1)).rms), dB(trial3), 0.3,
+      `the room bed at trial-3 scale (${trial3})`);
+    near(dBBetween((await eventAt(trial3)).maxWin, (await eventAt(1)).maxWin), dB(trial3), 0.5,
+      `a room event at trial-3 scale (${trial3})`);
+    console.log(`          headroom against the cue is therefore the same on all ${TRIAL_AUDIO_SCALE.length} trials`
+      + ` (bed -${ROOM_CEILING.bedBelowFloor} dB, events -${ROOM_CEILING.eventBelowCue} dB or better)`);
+  });
+
+  await t("level 6's five depths arrive on one ladder, not on five", async () => {
+    /* The defect CLAUDE.md has been carrying as known-and-unfixed. All five
+       depth layers shared one gain curve, and a shared gain is not a shared
+       level: at the curve's aligned value they rendered +25.9, +14.5, +23.0,
+       -9.2 and +19.8 dB against the calibration reference — a 35.1 dB spread.
+       The surface hiss sat on top of everything the briefing promises is
+       underneath it, and the Lattice, reached only by holding through 70% of a
+       35-second hold, was 35 dB down and inaudible. `depthTrim` is the fix and
+       this is what holds it.
+
+       Two spreads, because the textures are not alike. Four layers are
+       continuous and are matched on RMS; the Lattice is impulsive, with a
+       crest factor about 8 dB above the others, so matching its RMS would have
+       put its clicks proud of everything around it. It is matched on its
+       loudest 50 ms instead, which is why the RMS spread is the looser bound.
+
+       Not asserted, and worth saying: equal rendered level is not equal
+       LOUDNESS. At this game's listening level the 120 Hz Core will read
+       softer than the 2.6 kHz Shell even though they now measure the same.
+       That needs an ear, a phone and a quiet room. */
+    const lv = levels.find((l) => l.id === 6);
+    assert(lv && lv.depthTrim, 'level 6 must carry a depthTrim');
+    const layers = [
+      { color: 'white', filterType: 'highpass', freq: 2600, Q: 0.6 },
+      { color: 'brown', filterType: 'bandpass', freq: 700, Q: 1 },
+      { color: 'brown', filterType: 'lowpass', freq: 260, Q: 0.8 },
+      { color: 'crackle', filterType: 'bandpass', freq: 420, Q: 2 },
+      { color: 'brown', filterType: 'lowpass', freq: 120, Q: 0.6 },
+    ];
+    const aligned = 0.015 + 0.4; // the level's own curve at alignment 1
+    const rms = [];
+    const win = [];
+    let power = 0;
+    for (let i = 0; i < layers.length; i++) {
+      const m = await h.render(({ audio }) => {
+        audio.voice(0, { ...A.o, gain: A.gain });
+      }, { args: { o: layers[i], gain: aligned * lv.depthTrim[i] }, seconds: 3 });
+      rms.push(dBBetween(m.rms, cueAligned));
+      win.push(dBBetween(m.maxWin, cueAligned));
+      power += m.rms ** 2;
+      console.log(`          depth ${i} (${layers[i].freq} Hz): ${rms[i].toFixed(1)} dB rms,`
+        + ` ${win[i].toFixed(1)} dB over 50 ms, against level 1's aligned draft`);
+    }
+    const spread = (a) => Math.max(...a) - Math.min(...a);
+    console.log(`          the whole stack, open and aligned: ${dBBetween(Math.sqrt(power), cueAligned).toFixed(1)} dB`
+      + " against level 1's aligned draft");
+    assert(spread(rms) <= 8, `the five depths span ${spread(rms).toFixed(1)} dB rms — they were 35.1 apart, and one ladder is the point`);
+    assert(spread(win) <= 5, `the five depths span ${spread(win).toFixed(1)} dB over 50 ms`);
   });
 
   /* ------------------------------------------------------------------ */

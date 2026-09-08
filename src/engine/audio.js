@@ -368,6 +368,70 @@ export class AudioEngine {
     };
   }
 
+  /**
+   * The room a level is standing in — the space itself, not the target.
+   *
+   * WHAT IT IS FOR. Every cue in this game is gated by alignment; nothing in
+   * the mix tells the Seeker they are anywhere at all. A room layer says where
+   * "here" is — a cave drips, a hollow has a floor under it — and it does so
+   * underneath the cue at every alignment value, never instead of it.
+   *
+   * WHY IT CANNOT BECOME A REWARD SCHEDULE. `update` takes the transport time
+   * and nothing else. The room has no reference to alignment, presence, hold,
+   * or the trial's progress, and no way to acquire one through this interface,
+   * so a room event cannot be made to answer a presence mark or to arrive
+   * because the Seeker did something. That is a structural guarantee rather
+   * than a promise in a comment, and `npm run test:audio` pins the arity.
+   * Event spacing is drawn from a range because a room that ticks is a
+   * metronome; the randomness is in the *spacing of furniture*, never in a
+   * payoff, which is the distinction pillar 3 actually draws.
+   *
+   * WHAT IT ROUTES THROUGH. Beds go out via `ambient()` and events via
+   * `burst()`, so the trial scaling and the reference plane are already owned
+   * — a room gets quieter on trial 3 exactly as the cue does, which is what
+   * keeps its headroom against the cue constant across all three trials.
+   *
+   * LEVEL. A room's numbers are bounded by ROOM_CEILING in constants.js and
+   * measured by the audio suite, not chosen by ear here. The two bounds are
+   * different because a bed and an event mask differently: a bed competes with
+   * the cue continuously and is judged against the cue's *misaligned floor*;
+   * an event competes only for the tens of milliseconds it lasts and is judged
+   * against the cue at *full alignment*.
+   *
+   *   spec.beds    [{ color, filterType, freq, Q, gain }]  continuous
+   *   spec.events  [{ ...burst opts, bearing, every: [minSec, maxSec] }]
+   *   spec.fade    seconds; the room arrives, it does not switch on
+   */
+  room(spec = {}) {
+    const engine = this;
+    const fade = spec.fade != null ? spec.fade : 1.5;
+    const beds = (spec.beds || []).map((b) => {
+      const bed = engine.ambient({ color: b.color, filterType: b.filterType, freq: b.freq, Q: b.Q });
+      bed.level(b.gain, fade);
+      return bed;
+    });
+
+    const span = (every) => every[0] + Math.random() * (every[1] - every[0]);
+    const events = (spec.events || []).map((e) => ({ e, nextAt: span(e.every) }));
+
+    return {
+      /** Advance the room. Transport time only — see the note above. */
+      update(t) {
+        for (const ev of events) {
+          if (t < ev.nextAt) continue;
+          const e = ev.e;
+          engine.burst({
+            angleDeg: typeof e.bearing === 'number' ? e.bearing : Math.floor(Math.random() * 360),
+            color: e.color, filterType: e.filterType, freq: e.freq, Q: e.Q,
+            dur: e.dur, attack: e.attack, gain: e.gain,
+          });
+          ev.nextAt = t + span(e.every);
+        }
+      },
+      stop() { beds.forEach((b) => b.stop()); },
+    };
+  }
+
   /** A one-shot positioned sound (rustle, footfall, ember crackle). */
   burst(o = {}) {
     const buf = this.buffers[o.color || 'white'];

@@ -40,6 +40,31 @@ export const MARK_REARM = 12;
 export const MARK_CLEARANCE = 8;
 
 /**
+ * The room layer's headroom against the cue, in decibels.
+ *
+ * A level's room — a cave's drips, a hollow's floor — sits underneath the
+ * alignment-carrying voice at every alignment value. These two numbers are
+ * what "underneath" means, and they are different because a bed and an event
+ * mask differently:
+ *
+ *   bedBelowFloor    A bed competes with the cue continuously, so it is judged
+ *                    against the cue at its WORST — the misaligned floor. The
+ *                    room must never be the loudest thing in a misaligned
+ *                    moment, which is the whole premise of the first minute of
+ *                    level 1.
+ *   eventBelowCue    A drip competes only for the tens of milliseconds it
+ *                    lasts, so it is judged against the cue at FULL alignment,
+ *                    measured over a ~50 ms window — roughly the ear's
+ *                    integration time, and therefore the window in which a
+ *                    transient can mask a steady sound.
+ *
+ * These are ceilings, not targets: the shipped rooms sit well under both, and
+ * `npm run test:audio` prints where. Like everything in this file they are
+ * reasoned rather than measured against an ear.
+ */
+export const ROOM_CEILING = { bedBelowFloor: 3, eventBelowCue: 6 };
+
+/**
  * THE NARROWINGS — the four eras.
  *
  * Level counts follow a 4:3:2:1 compression. This is a production decision as
