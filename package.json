@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "check": "node scripts/check-levels.mjs",
     "test": "node scripts/contract.test.mjs && node scripts/handoff.test.mjs && node scripts/account.test.mjs && node scripts/sync.test.mjs",
-    "test:e2e": "npm run build && node scripts/ui.e2e.mjs"
+    "test:e2e": "npm run build && node scripts/ui.e2e.mjs",
+    "test:audio": "node scripts/audio.e2e.mjs"
   },
   "dependencies": {
     "@weaveaijs/tantu": "^0.3.2",

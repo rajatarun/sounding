@@ -99,11 +99,25 @@ export class AudioEngine {
    * Placed off-centre because the first sound the game makes should be audibly
    * spatial — the medium is the product, and this used to be mono.
    *
-   * What CALIBRATION_GAIN now means, on the shared path: level 1's aligned cue
-   * on trial 1 sits ~20 dB above this reference, and its misaligned floor ~8 dB
-   * below it. That is the intended shape — near-inaudible misaligned, clearly
-   * present aligned — but the absolute number is unvalidated, like everything
-   * in constants.js. It wants a quiet room and a real pair of headphones.
+   * What CALIBRATION_GAIN means on the shared path, MEASURED rather than
+   * computed: level 1's aligned cue on trial 1 renders ~15.9 dB above this
+   * reference and its misaligned floor ~5.9 dB below it — a span of ~21.8 dB.
+   * This used to read "~20 dB" and "~8 dB", which is the arithmetic on the
+   * gain constants (0.52 and 0.02 against 0.05) and is not what leaves the
+   * engine. The difference is timbre: level 1 raises the draft's bandpass Q
+   * from 0.6 to 3.8 as the Seeker aligns, and narrowing a constant-peak
+   * bandpass gives back about 6 dB of the level the gain curve just paid for.
+   *
+   * The lesson is larger than this docstring. On a broadband source a gain
+   * constant does not predict a level, so any claim about this mix has to be
+   * rendered and read rather than multiplied out. `npm run test:audio` renders
+   * these two figures and prints them; that is where the numbers above came
+   * from and how they stay true.
+   *
+   * The shape is the intended one — near-inaudible misaligned, clearly present
+   * aligned — and the shape is what the suite asserts. The absolute values are
+   * still unvalidated against an ear: they want a quiet room and real
+   * headphones, like everything in constants.js.
    *
    * Note this raises nothing: master.gain and every per-level constant are
    * untouched. It makes the reference honest, which is the opposite edit.
