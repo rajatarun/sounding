@@ -179,6 +179,33 @@ export function checkAudioSource(source, label = 'level source') {
     out.push(err(`${label}:${line(m.index)}`, 'audio-routing',
       'positionPanner assigns without ramping — a level that moves a source must use movePanner'));
   }
+
+  /**
+   * A room has no bearing, and neither does anything in it.
+   *
+   * Room events used to be panned to a point drawn once per trial. Un-gated by
+   * alignment, but still carrying real directional information — a second
+   * compass in a game built on there being exactly one. `room()` no longer
+   * reads a bearing, so a positional key left in a spec is silently inert,
+   * which is the worst of both: it reads as intentional placement and does
+   * nothing. Caught here rather than thrown at runtime, so it blocks a commit
+   * instead of a player's trial.
+   */
+  for (const m of source.matchAll(/\baudio\.room\s*\(/g)) {
+    let depth = 0;
+    let end = m.index + m[0].length - 1;
+    for (; end < source.length; end++) {
+      if (source[end] === '(') depth++;
+      else if (source[end] === ')' && --depth === 0) break;
+    }
+    const body = source.slice(m.index, end);
+    for (const key of ['bearing', 'angleDeg', 'distance', 'positioned']) {
+      const hit = body.match(new RegExp(`\\b${key}\\s*:`));
+      if (!hit) continue;
+      out.push(err(`${label}:${line(m.index + hit.index)}`, 'audio-routing',
+        `room spec carries \`${key}\` — a room is not positioned, and room() ignores it`));
+    }
+  }
   // A per-frame gain write that forgets the trial scaling produces a voice
   // identically loud on trial 3 as on trial 1 — precisely what "a deeper kind
   // of listening" promises it is not. This is how level 4's reward tone, the

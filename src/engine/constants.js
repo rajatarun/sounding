@@ -40,29 +40,52 @@ export const MARK_REARM = 12;
 export const MARK_CLEARANCE = 8;
 
 /**
- * The room layer's headroom against the cue, in decibels.
+ * The room layer's headroom against the cue, in A-WEIGHTED decibels.
  *
  * A level's room — a cave's drips, a hollow's floor — sits underneath the
- * alignment-carrying voice at every alignment value. These two numbers are
- * what "underneath" means, and they are different because a bed and an event
- * mask differently:
+ * alignment-carrying voice at every alignment value. These numbers are what
+ * "underneath" means.
  *
- *   bedBelowFloor    A bed competes with the cue continuously, so it is judged
- *                    against the cue at its WORST — the misaligned floor. The
- *                    room must never be the loudest thing in a misaligned
- *                    moment, which is the whole premise of the first minute of
- *                    level 1.
- *   eventBelowCue    A drip competes only for the tens of milliseconds it
- *                    lasts, so it is judged against the cue at FULL alignment,
- *                    measured over a ~50 ms window — roughly the ear's
- *                    integration time, and therefore the window in which a
- *                    transient can mask a steady sound.
+ * WHY A-WEIGHTED, and it is the whole reason the room shipped inaudible. This
+ * game is played at the threshold of hearing: the Seeker sets device volume so
+ * a 500 Hz reference tone is barely there. A flat RMS says nothing about
+ * audibility down there, because the ear's sensitivity falls off a cliff below
+ * about 200 Hz. The 85 Hz bed this file shipped measured 4.7 dB under the cue's
+ * misaligned floor flat — comfortably inside the old rule — and 18.3 dB under
+ * it A-weighted, which is 26.9 dB below the Seeker's own reference. Not quiet:
+ * absent. Every number here is now weighted, and `npm run test:audio` reports
+ * both so the gap between them stays visible.
  *
- * These are ceilings, not targets: the shipped rooms sit well under both, and
- * `npm run test:audio` prints where. Like everything in this file they are
- * reasoned rather than measured against an ear.
+ *   bedBelowCue      A bed runs continuously, so it is judged against the cue
+ *                    at FULL alignment: the thing the Seeker steers toward must
+ *                    stay the loudest thing in the mix by a wide margin.
+ *   eventBelowCue    A drip competes only for the tenths of a second it lasts,
+ *                    so it is judged over the loudest ~43 ms window. The margin
+ *                    is smaller because the duty cycle is a few percent, and it
+ *                    is not zero because an event must never BE the cue's peak.
+ *   bedInCueBand     The one per-band rule, and the one that actually protects
+ *                    the mechanic: a bed's energy inside the cue's own critical
+ *                    band, against what the cue's misaligned floor puts there.
+ *                    Broadband level is a register question; this is the
+ *                    masking question, and only this one can flatten the bottom
+ *                    of the alignment gradient the Seeker is hunting along.
+ *
+ * WHAT WAS DROPPED, named rather than quietly widened. The old rule bounded a
+ * bed against the cue's MISALIGNED FLOOR broadband. That floor sits 8.6 dB
+ * below the calibration reference A-weighted — below the Seeker's own
+ * just-audible point — so "quieter than the floor" and "inaudible" were the
+ * same requirement, and no room a person could hear could ever have satisfied
+ * it. The shipped beds now sit ABOVE that floor broadband, by design and at the
+ * project owner's direction, which is a real relaxation of a stated pillar: the
+ * room is no longer guaranteed to be quieter than the cue at its quietest.
+ * What replaces the guarantee is narrower and more honest — the cue at full
+ * alignment still dominates by 17 dB, and the cue's own band stays cleaner than
+ * its own floor leaves it.
+ *
+ * These are ceilings, not targets. Like everything in this file they are
+ * reasoned and rendered, never validated against an ear.
  */
-export const ROOM_CEILING = { bedBelowFloor: 3, eventBelowCue: 6 };
+export const ROOM_CEILING = { bedBelowCue: 12, eventBelowCue: 3, bedInCueBand: 2 };
 
 /**
  * THE NARROWINGS — the four eras.

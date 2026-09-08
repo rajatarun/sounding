@@ -407,14 +407,33 @@ project came from. The contract treats a direct `audio.bus` connection and a
 
 If the level's own space needs a voice — a drip, a settling rock, the floor of
 an enclosure — that is `audio.room()`, not a hand-built loop of `burst()` calls.
-It routes beds through `ambient()` and events through `burst()` so the trial
-scaling and reference plane are owned the same way, and its `update` takes only
-the transport time: a room has no way to see alignment, presence or hold, so it
-cannot be made to answer a presence mark or arrive because the Seeker did
-something. Not every level should have one — see the room block at the top of
-`first-narrowing.js` for which five of the first ten do and why the other five
-deliberately don't. A room's level is bounded by `ROOM_CEILING` in
-`constants.js` and measured by `npm run test:audio`, not chosen by ear.
+It routes beds through `ambient()` and events through `burst({ positioned:
+false })` so the trial scaling and reference plane are owned the same way, and
+its `update` takes only the transport time: a room has no way to see alignment,
+presence or hold, so it cannot be made to answer a presence mark or arrive
+because the Seeker did something. Not every level should have one — see the room
+block at the top of `first-narrowing.js` for which five of the first ten do and
+why the other five deliberately don't. A room's level is bounded by
+`ROOM_CEILING` in `constants.js` and measured by `npm run test:audio`, not
+chosen by ear.
+
+**Nothing in a room has a bearing.** Beds never did; events used to be panned to
+a point drawn once per trial, which was a second compass in a game built on
+there being exactly one direction worth finding. Un-gated by alignment is not
+the same guarantee as carrying no direction, and only the second one is safe.
+`room()` no longer reads a bearing, and `npm run check` treats `bearing`,
+`angleDeg`, `distance` or `positioned` in a room spec as an error. A sound that
+genuinely belongs at a bearing is a cue, so it is `source()` or a direct
+`burst()`, not room furniture.
+
+**Room levels are A-weighted, and that is not pedantry.** The room shipped
+inaudible on a real device while every flat measurement said it was correctly
+placed, because at the threshold this game is played at, flat RMS says nothing
+about audibility below a few hundred hertz — the 85 Hz bed measured 4.7 dB under
+the cue's misaligned floor flat and 18.3 dB under it weighted. The old rule also
+bounded a bed against that misaligned floor, which is itself below audibility,
+so no room a person could hear could ever have passed. Both are fixed; see
+`ROOM_CEILING`, which names the pillar the fix relaxed.
 
 Match the era's contract. A First or Second Narrowing level must not be able to
 fail; `npm run check` now enforces that rather than trusting the comment.

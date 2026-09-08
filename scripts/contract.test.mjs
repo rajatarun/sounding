@@ -120,6 +120,37 @@ t('accepts movePanner', () => {
   assert(checkAudioSource('ctx.audio.movePanner(s.voice.panner, s.a);').length === 0, 'movePanner wrongly flagged');
 });
 
+t('catches a bearing left in a room spec (the room has no direction)', () => {
+  /* `room()` stopped reading a bearing when room events stopped being panned.
+     A stray positional key is therefore inert, which is worse than wrong: it
+     reads as deliberate placement and does nothing. The checker is what makes
+     it loud, and it has to survive the multi-line, multi-event shape a real
+     level writes rather than only the one-liner. */
+  for (const key of ['bearing: 40', 'angleDeg: 40', 'distance: 1', 'positioned: true']) {
+    assert(has(checkAudioSource(`s.room = audio.room({ events: [{ ...DRIP, ${key}, every: [5, 9] }] });`), 'audio-routing', 'error'),
+      `\`${key}\` in a room spec not flagged`);
+  }
+  const real = [
+    's.room = audio.room({',
+    '  beds: [STONE],',
+    '  events: [',
+    '    { ...DRIP_NEAR, every: [5, 11] },',
+    '    { ...SETTLE, bearing: roomBearing(), every: [30, 60] },',
+    '  ],',
+    '});',
+  ].join('\n');
+  assert(has(checkAudioSource(real), 'audio-routing', 'error'), 'a bearing in a multi-line room spec not flagged');
+});
+
+t('accepts a room spec with no bearing, and a bearing outside one', () => {
+  assert(checkAudioSource('s.room = audio.room({ beds: [STONE], events: [{ ...DRIP, every: [5, 9] }] });').length === 0,
+    'a clean room spec was flagged');
+  /* A cue is entitled to a bearing — level 5's ember and level 8's calls are
+     positioned bursts and must stay that way. The rule is about rooms only. */
+  assert(checkAudioSource('ctx.audio.burst({ angleDeg: s.emberAngle, gain: 0.3 * ctx.audio.audioScale });').length === 0,
+    'a positioned cue burst was flagged as room furniture');
+});
+
 t('catches a gain write with no trial scaling (level 4 reward tone)', () => {
   assert(has(checkAudioSource('s.nodes.resGain.gain.setTargetAtTime((s.sync / 100) * 0.2, now, 0.25);'), 'audio-scale', 'warning'),
     'unscaled gain not flagged');
