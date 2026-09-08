@@ -584,9 +584,9 @@ body.snd-noscroll {
 @media (prefers-reduced-motion: reduce) {
   .snd-orb, .snd-breathe-btn { transition: none !important; }
   /* The Force signatures are ambient, not informational — every one of them
-     has a still resting state that reads the same. The alignment reading
-     itself is carried by the inline scale/opacity, which never animates, so
-     nothing is lost here. */
+     has a still resting state that reads the same. The orb carries no
+     alignment reading at all any more (see GameScreen.jsx), so there is
+     nothing here for reduced motion to lose either way. */
   .snd-orb, .snd-orb::before { animation: none !important; }
   [data-force="void"] .snd-orb::before { opacity: 0.4; transform: scale(1.2); }
   [data-force="flow"] .snd-orb::before { transform: scale(1); }

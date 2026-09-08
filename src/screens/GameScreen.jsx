@@ -73,8 +73,14 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const flashTimeoutRef = useRef(null);
   const dragzoneRef = useRef(null);
   const orbRef = useRef(null);
+  const screenRef = useRef(null);
   const commitRef = useRef(() => {});
   const markRef = useRef(0);
+  // Read inside the frame loop and the window keydown handler, both set up
+  // once in the mount effect below and closed over `showWelcome` at that
+  // moment only — a ref is what lets them see it change.
+  const showWelcomeRef = useRef(firstEver);
+  useEffect(() => { showWelcomeRef.current = showWelcome; }, [showWelcome]);
 
   const substrate = useSubstrate();
   const force = level.force.name.toLowerCase();
@@ -90,7 +96,16 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     return () => spoken.stop();
   }, [showWelcome]);
 
-  function dismissWelcome() { setShowWelcome(false); }
+  function dismissWelcome() {
+    setShowWelcome(false);
+    // TantuDialog restores focus to whatever was focused when it opened —
+    // and it opens at mount, one commit after the briefing screen's own
+    // button has already unmounted, so what it captured was <body>. Left
+    // alone, dismissing hands focus back to <body> and a keyboard Seeker is
+    // standing outside the screen. Deferred one tick so this runs after that
+    // restoration rather than racing it.
+    setTimeout(() => screenRef.current?.focus(), 0);
+  }
 
   useEffect(() => {
     const state = levelStateRef.current;
@@ -169,6 +184,15 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
 
     function frame(ts) {
       if (!runningRef.current) return;
+      if (showWelcomeRef.current) {
+        // The trial does not run behind the welcome — see the dialog's own
+        // comment below. Held at frame 0 rather than merely un-advanced, so
+        // the first real frame after dismissal starts clean instead of
+        // charging a multi-second dt for time the Seeker spent reading.
+        lastFrameRef.current = 0;
+        rafRef.current = requestAnimationFrame(frame);
+        return;
+      }
       if (!lastFrameRef.current) lastFrameRef.current = ts;
       const dt = Math.min((ts - lastFrameRef.current) / 1000, 0.1);
       lastFrameRef.current = ts;
@@ -191,7 +215,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     commitRef.current = tryCommit;
 
     function onKeyDown(e) {
-      if (!runningRef.current) return;
+      if (!runningRef.current || showWelcomeRef.current) return;
       if (e.key === 'ArrowLeft') steering.turn(-8);
       if (e.key === 'ArrowRight') steering.turn(8);
       if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') tryCommit();
@@ -261,7 +285,13 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
     // layout needs them. It used to hang off `.snd-voidfield`, which pinned the
     // presence meter inside a full-viewport field and left it to fend for
     // itself against the controls — which it lost, by 62–72%.
-    <div className="snd-screen snd-screen-game" data-force={force} data-depth={depth}>
+    <div
+      ref={screenRef}
+      tabIndex={-1}
+      className="snd-screen snd-screen-game"
+      data-force={force}
+      data-depth={depth}
+    >
       {/* What the player's hands are doing. It read "steering · swipe" on the
           two breathe levels, which have no steering at all — the same gate
           this screen kept getting wrong in the other direction. */}
@@ -320,11 +350,15 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
         aria-label={WELCOME_LINE}
         className="snd-welcome"
       >
-        {/* announce=false: the dialog's own aria-label already gives a
-            screen reader the sentence the moment focus lands in it — a
-            second announcement here, arriving ~2s later when the sweep
-            finishes, would just repeat it. */}
-        <BaluchariReveal className="snd-welcome-line" durationMs={2200} announce={false}>
+        {/* The dialog's own aria-label announces the sentence once, the
+            moment focus lands — but a name is given on arrival and cannot be
+            asked for again, and BaluchariReveal's drawn line is permanently
+            aria-hidden. Without `announce`, a Seeker who has already moved
+            past that first announcement and comes back to browse the panel
+            finds only "Begin". Left at its default (true) so the role="status"
+            copy BaluchariReveal leaves behind once the sweep finishes is the
+            second, reachable place this sentence lives. */}
+        <BaluchariReveal className="snd-welcome-line" durationMs={2200}>
           {WELCOME_LINE}
         </BaluchariReveal>
         <div className="snd-btnrow">

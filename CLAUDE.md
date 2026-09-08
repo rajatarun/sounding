@@ -161,17 +161,36 @@ allowed one — see above. It belongs in the Third Narrowing, where CLAUDE.md
 already says urgency is deliberately introduced, not in the first level anyone
 ever plays. Noted here so the idea isn't lost, not because it was wrong.
 
+The welcome is a real `TantuDialog`, `aria-modal="true"`, and the trial
+behind it must actually be inert while it's up — this did not hold on first
+ship. `GameScreen`'s mount effect starts `level.init`, the frame loop and a
+window `keydown` handler unconditionally, none of it originally aware the
+dialog existed, so a Seeker could steer and cross the first presence mark
+with the panel still covering the orb the mark's dye front draws from. Both
+the frame loop and `onKeyDown` now check a `showWelcomeRef` (a ref, because
+both closures are set up once at mount and a plain `showWelcome` read there
+would be stale) and no-op while it's true. If you add another way into the
+level — another listener, another effect that reaches `level.update` or
+`steering` — gate it the same way, or the welcome stops being modal in
+substance even though it still is in markup. Dismissal also explicitly
+refocuses the game screen (`screenRef`, `tabIndex={-1}`): `TantuDialog`
+returns focus to whatever it captured on open, which at mount is already
+`<body>`, so without this a keyboard Seeker is dropped outside the screen
+on Begin. And `BaluchariReveal` is left at its default `announce` — the
+dialog's `aria-label` names the sentence once, on arrival, and cannot be
+asked for again, while the drawn line is permanently `aria-hidden`;
+`announce`'s `role="status"` copy is what makes the sentence reachable a
+second time.
+
 **`BaluchariReveal` lives in Tantu, not in this repo**, on the same reasoning
 as everything else in "The UI runs on Tantu" above: a text-weave primitive
 that presumed a vocabulary or a tone would not be reusable, so it was built
 upstream (`aiweave`, `src/tantu/components/BaluchariReveal.tsx`) rather than
-duplicated here. **As of this writing it is not yet published** —
-`@weaveaijs/tantu` stays at 0.3.2 on the npm registry until someone bumps the
-version and runs aiweave's `release.yaml`, which that workflow's own comments
-describe as "a deliberate human action" and not something to trigger casually.
-Until that happens, `GameScreen.jsx`'s import of `BaluchariReveal` will not
-resolve against a fresh `npm install` — this is expected, not a regression, and
-it is the one thing standing between this feature and actually running.
+duplicated here. It shipped as part of `@weaveaijs/tantu@0.4.0`, published to
+the registry after aiweave's `release.yaml` — which that workflow's own
+comments describe as "a deliberate human action" — was run by hand. This
+repo's `package.json` now depends on `^0.4.0`; a fresh `npm install` resolves
+`BaluchariReveal` with no workaround.
 
 **Level 1 is easier the very first time anyone plays it.** `state.onboarding`
 is true only for the first trial a Seeker ever *enters*, and level 1 uses it to
@@ -372,10 +391,16 @@ level rather than an emergent property of set arithmetic.
 `constants.js` always promised a perceptual channel per Force; `game.css`'s
 `[data-force]` block is where they finally live — a drifting wisp, a flicker,
 a swell, device haptics for Mass, echo rings for Void. One rule when editing
-them: **never animate `transform` or `opacity` on `.snd-orb`.** Those two
-carry the live alignment reading as inline styles, and a CSS animation
-outranks an inline declaration — animating them silently overwrites the
-feedback the level is built on. Motion goes on the pseudo-elements.
+them: **motion goes on the pseudo-elements, never on `.snd-orb` itself.**
+This used to matter because `transform`/`opacity` on `.snd-orb` carried the
+live alignment reading as inline styles, and a CSS animation outranks an
+inline declaration — animating them silently overwrote the feedback the
+level was built on. That reading is gone now (see "The orb no longer shows
+alignment" above), so the old failure mode can't recur, but the split still
+stands: `.snd-orb` is the element `answerMark()` measures the screen
+position of for the presence-mark dye front, and putting motion on the
+pseudo-elements keeps that geometry stable regardless of what a Force
+signature is doing visually.
 
 ## Hand UI work to QA
 
