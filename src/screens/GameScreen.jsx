@@ -18,6 +18,26 @@ const REARM = MARK_REARM;
 const BEAT_MS = 2100;
 
 /**
+ * Floor on how often a `commit`-control level's `onCommit` can fire, in
+ * game-elapsed seconds. This is a rate limit on the INPUT, not a penalty on
+ * being wrong: a wrong commit still costs nothing per attempt (see pillar 3
+ * and CLAUDE.md's "Level 2 lets you guess wrong with no penalty"), but
+ * nothing stopped it from being repeated fast enough to substitute for
+ * listening entirely. Without this, holding a turn key (which repeats under
+ * normal OS key-repeat) while mashing Space/Enter/click sweeps the whole
+ * circle past any level's tolerance window within a single short episode —
+ * a wall-clock-cheap way to "win" that requires no discrimination at all.
+ * Lives here rather than in any one level's `onCommit` because it is a
+ * property of the shared commit plumbing (every keydown and every click
+ * reaches `tryCommit` with no debounce of its own) and every `commit`-
+ * control level shares the exposure — level 2's rhythm-vs-leaf judgement and
+ * level 7's phase-1 static bearing both go through this same path. ~1.0s is
+ * roughly 2x level 2's 0.46s footfall stride: a genuine single deliberate
+ * commit per real judgement is unaffected; only sub-second mashing is.
+ */
+const COMMIT_MIN_INTERVAL = 1.0;
+
+/**
  * The one line this game says out loud, and only once — the first time any
  * Seeker ever enters a trial, gated on the same `firstEver` flag level 1
  * already uses to soften its opening (see `state.onboarding` in
@@ -76,6 +96,9 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const screenRef = useRef(null);
   const commitRef = useRef(() => {});
   const markRef = useRef(0);
+  // Game-elapsed time (matches ctx.elapsed) of the last onCommit that was
+  // actually dispatched — see COMMIT_MIN_INTERVAL above.
+  const lastCommitAtRef = useRef(-Infinity);
   // Read inside the frame loop and the window keydown handler, both set up
   // once in the mount effect below and closed over `showWelcome` at that
   // moment only — a ref is what lets them see it change.
@@ -210,6 +233,13 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
 
     function tryCommit() {
       if (!runningRef.current || !level.onCommit) return;
+      // Rate-limited, not penalised: a commit inside the floor is dropped
+      // silently — no flash, no state change, nothing the level even sees —
+      // so mashing costs nothing and gains nothing, same as a single wrong
+      // commit does. See COMMIT_MIN_INTERVAL.
+      const now = elapsedRef.current;
+      if (now - lastCommitAtRef.current < COMMIT_MIN_INTERVAL) return;
+      lastCommitAtRef.current = now;
       level.onCommit(state, levelCtx());
     }
     commitRef.current = tryCommit;
