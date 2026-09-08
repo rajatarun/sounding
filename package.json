@@ -14,7 +14,7 @@
     "test:audio": "node scripts/audio.e2e.mjs"
   },
   "dependencies": {
-    "@weaveaijs/tantu": "^0.3.2",
+    "@weaveaijs/tantu": "^0.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
