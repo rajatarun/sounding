@@ -386,25 +386,43 @@ export class AudioEngine {
    * metronome; the randomness is in the *spacing of furniture*, never in a
    * payoff, which is the distinction pillar 3 actually draws.
    *
+   * WHY NOTHING IN IT HAS A BEARING. This game rests on there being exactly
+   * ONE directional signal per level — the thing the Seeker turns to find. A
+   * room event used to be panned, at a bearing fixed for the trial, and that is
+   * a second compass: un-gated by alignment, yes, but still carrying ITD, ILD
+   * and the pinna colouration that say "over there". "It does not get quieter
+   * when you look away" is a weaker guarantee than "it has no direction to look
+   * away from", and only the second one is safe. So beds AND events both go out
+   * through `nonPositioned`; `room()` never builds a panner and never reads a
+   * bearing. The contract treats a positional key on a room event as an error,
+   * and the audio suite pins that a room event's ear balance does not move when
+   * the listener turns, while the cue's does.
+   *
    * WHAT IT ROUTES THROUGH. Beds go out via `ambient()` and events via
-   * `burst()`, so the trial scaling and the reference plane are already owned
-   * — a room gets quieter on trial 3 exactly as the cue does, which is what
-   * keeps its headroom against the cue constant across all three trials.
+   * `burst({ positioned: false })`, so the trial scaling and the reference
+   * plane are already owned — a room gets quieter on trial 3 exactly as the cue
+   * does, which is what keeps its headroom against the cue constant across all
+   * three trials.
    *
    * LEVEL. A room's numbers are bounded by ROOM_CEILING in constants.js and
-   * measured by the audio suite, not chosen by ear here. The two bounds are
-   * different because a bed and an event mask differently: a bed competes with
-   * the cue continuously and is judged against the cue's *misaligned floor*;
-   * an event competes only for the tens of milliseconds it lasts and is judged
-   * against the cue at *full alignment*.
+   * measured by the audio suite, not chosen by ear here. Both bounds are
+   * A-WEIGHTED, because this game is played at the threshold of hearing and a
+   * flat measure is not a statement about audibility down there: the 85 Hz bed
+   * this seam shipped with measured 4 dB under the cue's misaligned floor flat
+   * and 18 dB under it A-weighted, which is the difference between "quiet" and
+   * "not there", and it is why the room was inaudible on a real device.
    *
    *   spec.beds    [{ color, filterType, freq, Q, gain }]  continuous
-   *   spec.events  [{ ...burst opts, bearing, every: [minSec, maxSec] }]
+   *   spec.events  [{ ...burst opts, every: [minSec, maxSec] }]  no bearing
    *   spec.fade    seconds; the room arrives, it does not switch on
+   *   spec.lead    fraction of the first interval to wait before the first
+   *                firing; a room should establish itself while the Seeker is
+   *                still settling, not after they have decided it is silent
    */
   room(spec = {}) {
     const engine = this;
     const fade = spec.fade != null ? spec.fade : 1.5;
+    const lead = spec.lead != null ? spec.lead : 0.35;
     const beds = (spec.beds || []).map((b) => {
       const bed = engine.ambient({ color: b.color, filterType: b.filterType, freq: b.freq, Q: b.Q });
       bed.level(b.gain, fade);
@@ -412,7 +430,10 @@ export class AudioEngine {
     });
 
     const span = (every) => every[0] + Math.random() * (every[1] - every[0]);
-    const events = (spec.events || []).map((e) => ({ e, nextAt: span(e.every) }));
+    /* The first firing is drawn from the same range and then pulled in by
+       `lead`. It is still transport time and still the same for every trial —
+       the room simply does not open with its longest silence. */
+    const events = (spec.events || []).map((e) => ({ e, nextAt: span(e.every) * lead }));
 
     return {
       /** Advance the room. Transport time only — see the note above. */
@@ -421,7 +442,7 @@ export class AudioEngine {
           if (t < ev.nextAt) continue;
           const e = ev.e;
           engine.burst({
-            angleDeg: typeof e.bearing === 'number' ? e.bearing : Math.floor(Math.random() * 360),
+            positioned: false,
             color: e.color, filterType: e.filterType, freq: e.freq, Q: e.Q,
             dur: e.dur, attack: e.attack, gain: e.gain,
           });
@@ -432,7 +453,23 @@ export class AudioEngine {
     };
   }
 
-  /** A one-shot positioned sound (rustle, footfall, ember crackle). */
+  /**
+   * A one-shot sound (rustle, footfall, ember crackle, a drip in a cave).
+   *
+   * `positioned: false` routes it through `nonPositioned` instead of a panner,
+   * which is how a one-shot says "this belongs to the space, not to a bearing".
+   * It is the event counterpart of `ambient()`, and `room()` uses nothing else.
+   *
+   * THE TRIM IS NOT APPLIED TWICE, and this is the trap. `referenceTrim` exists
+   * to put a *panned* voice back on the reference plane after `distance` moved
+   * it off. `nonPositioned` is already trimmed to that same plane, once, in
+   * `init()`. Applying the trim on top of it would attenuate a non-positioned
+   * burst by a second flat 1/6 — about -15.6 dB — which is this project's
+   * signature defect with its sign flipped, and just as invisible in the source.
+   * So the trim belongs to the panner path and only to it. `distance` is
+   * likewise meaningless without a panner and is ignored; the level contract
+   * treats a positional key on a room event as an error.
+   */
   burst(o = {}) {
     const buf = this.buffers[o.color || 'white'];
     const dur = o.dur || 0.3;
@@ -447,14 +484,20 @@ export class AudioEngine {
     const gain = this.ctx.createGain();
     gain.gain.value = 0;
 
-    const radius = o.distance || REFERENCE_RADIUS;
-    const panner = this.makePanner(o.angleDeg || 0, radius);
-    src.connect(filt); filt.connect(gain); gain.connect(panner); panner.connect(this.bus);
+    const positioned = o.positioned !== false;
+    const radius = positioned ? (o.distance || REFERENCE_RADIUS) : REFERENCE_RADIUS;
+    const panner = positioned ? this.makePanner(o.angleDeg || 0, radius) : null;
+
+    src.connect(filt); filt.connect(gain);
+    if (panner) { gain.connect(panner); panner.connect(this.bus); }
+    else gain.connect(this.nonPositioned);
 
     const now = this.ctx.currentTime;
     const attack = o.attack != null ? o.attack : 0.01;
-    // referenceTrim keeps `distance` a statement about place, not about level.
-    const peak = (o.gain != null ? o.gain : 0.5) * this.audioScale * this.referenceTrim(radius);
+    // referenceTrim keeps `distance` a statement about place, not about level —
+    // on the panner path only. See the note above on why not on the other one.
+    const trim = positioned ? this.referenceTrim(radius) : 1;
+    const peak = (o.gain != null ? o.gain : 0.5) * this.audioScale * trim;
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(peak, now + attack);
     gain.gain.linearRampToValueAtTime(0.0001, now + dur);
@@ -463,7 +506,7 @@ export class AudioEngine {
     const offset = Math.random() * Math.max(0.01, buf.duration - dur - 0.05);
     try { src.start(now, offset); src.stop(now + dur + 0.05); } catch (e) { /* noop */ }
     src.onended = () => {
-      try { src.disconnect(); filt.disconnect(); gain.disconnect(); panner.disconnect(); }
+      try { src.disconnect(); filt.disconnect(); gain.disconnect(); if (panner) panner.disconnect(); }
       catch (e) { /* noop */ }
     };
   }

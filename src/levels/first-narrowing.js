@@ -42,113 +42,140 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  *
  * The space a level stands in, distinct from the thing it is listening for.
  * Built with `audio.room()`, which routes beds through `ambient()` and events
- * through `burst()`, so the trial scaling and the reference plane are owned
- * for these the same way they are for a cue.
+ * through `burst({ positioned: false })`, so the trial scaling and the
+ * reference plane are owned for these the same way they are for a cue.
  *
  * NOT EVERY LEVEL GETS ONE, and that is the point. A forge does not drip and
  * a frozen clearing does not rumble like limestone, so a bed that suits level
  * 1 contradicts level 6's own briefing. Five levels carry a room; five
  * deliberately do not, each for a reason written at the level.
  *
- * THE LEVELS ARE MEASURED, NOT CHOSEN BY EAR. A gain constant does not predict
- * a level on a broadband source — that is the lesson already written into
- * `calibrationTone`'s docstring — so every number below was rendered through
- * the real graph and read back, in dB relative to the calibration reference
- * (the tone the Seeker sets their volume against, so 0 dB here is roughly
- * "just audible" at the level they chose). The yardsticks:
+ * NOTHING IN A ROOM HAS A BEARING. Beds never did; events used to, panned to a
+ * point drawn once per trial. That was wrong, and it is the second thing this
+ * pass fixed. A panned drip carries ITD, ILD and pinna colouration — it says
+ * "over there" — and this game rests on there being exactly ONE direction worth
+ * finding per level. An un-gated second bearing is still a second compass, and
+ * a careful Seeker sorting real directional information from real directional
+ * information has no way to know which one the level meant. `room()` now routes
+ * events through `nonPositioned` exactly as it routes beds, so a room event's
+ * ear balance is flat at every listener yaw while the draft's swings 7 dB
+ * across the circle. Measured, not asserted in prose.
  *
- *   level 1's aligned draft        +15.9 dB   the cue at its loudest
+ * It also removed a lottery: an identical drip used to measure 11.7 dB under
+ * the aligned cue at one bearing and 14.1 dB at another, purely from the HRTF,
+ * so a room's level was partly decided by a random draw. Without a panner every
+ * figure below is a constant.
+ *
+ * THE LEVELS ARE MEASURED, NOT CHOSEN BY EAR, AND THE MEASURE IS A-WEIGHTED.
+ * A gain constant does not predict a level on a broadband source, and a flat
+ * level does not predict audibility at the threshold this game is played at.
+ * Both lessons were learned the same way — by shipping something and finding
+ * out. Every figure below is rendered through the real graph and A-weighted,
+ * in dB relative to the calibration reference (0 dB is roughly "just audible"
+ * at the volume the Seeker chose). The yardsticks:
+ *
+ *   level 1's aligned draft        +14.8 dB   the cue at its loudest
  *   the calibration reference        0.0 dB   just audible, by construction
- *   level 1's misaligned floor      -5.9 dB   the cue at its quietest
+ *   level 1's misaligned floor      -8.6 dB   the cue at its quietest, and
+ *                                             therefore already inaudible
  *
- * ROOM_CEILING in constants.js says how far under those a room must sit, and
- * `npm run test:audio` holds the line. What is shipped here sits well below
- * both ceilings, because a ceiling is a bound and this is a design choice.
+ * WHAT CHANGED AND WHY, because the previous numbers were defended in this same
+ * comment and were wrong. The room shipped silent on a real device. Rendered
+ * flat it looked correctly placed; rendered A-weighted the beds sat 27-30 dB
+ * below the Seeker's own reference and the rock settle 14 dB below it. Those
+ * are not quiet sounds, they are absent ones, and the old broadband rule was
+ * what put them there — it bounded the room against a cue floor that is itself
+ * below audibility, so the only room that satisfied it was one nobody hears.
+ * ROOM_CEILING in constants.js now bounds the room against the cue at FULL
+ * alignment instead, and says plainly which pillar that relaxes.
  *
- * ONE THING THE MEASURING TURNED UP that is worth knowing before re-tuning
- * any of this: an identical event spec measures 11.7 dB under the aligned cue
- * at one bearing and 14.1 dB at another, purely from the HRTF. So a room's
- * level is really a band about 2.5 dB wide, decided by where a trial happens
- * to put its drip points, and every figure below is one sample from that band
- * rather than a constant. It is also why the margins here are generous: a
- * ceiling that a spec clears by 2 dB is a ceiling it does not clear.
+ * The drips are the surprise in the other direction: they were never the quiet
+ * ones. A-weighted, DRIP_NEAR was 1.4 dB under the aligned draft — effectively
+ * tying the loudest thing in the level — because the flat measure understates a
+ * 1.9 kHz transient by about 8 dB. Both drips came DOWN about 2 dB. If they
+ * were not heard on a device, spacing rather than level is the likely reason,
+ * and the spacing is what changed for them.
  *
- * A NOTE ON THE BED, said out loud rather than buried. STONE is set 4 dB below
- * level 1's misaligned floor, which is about 10 dB below the calibration
- * reference — so on phone earbuds, which mostly cannot reproduce 85 Hz at all,
- * it will not be audible. It could be roughly 8 dB louder without masking any
- * cue in this file, because an 85 Hz bed and a 300-460 Hz draft do not share
- * an auditory filter and masking is spectrally local. That argument is real,
- * but it is a mitigation and not an exemption: the rule as written is
- * broadband, and a bed at that level would sit ABOVE the cue's misaligned
- * floor — the room would be the loudest thing in the mix at the exact moment
- * the design wants near-silence. Widening the rule to a per-band one is a
- * decision about the pillar and belongs to the owner, so the bed stays under
- * the broadband rule and the low end stays honest rather than impressive.
+ * SPACING IS THE THIRD AXIS, and the cheapest one. A room whose first event is
+ * fifteen seconds away is a room the Seeker has already decided is not there,
+ * and every interval below used to open with its own longest silence. Two
+ * changes: the ranges came in, and `room()` now pulls the FIRST firing to about
+ * a third of a drawn interval, so level 1's cave drips within about five
+ * seconds instead of within fifteen. Neither makes the room a metronome — the
+ * ranges are still wide and still drawn — and neither is a payoff arriving
+ * sooner, because `update` still sees only the transport clock. What is being
+ * timed is furniture being in the room when the lights come up.
  */
 
 /**
- * The floor of an enclosed space. Sub-bass, so it is felt as enclosure rather
- * than heard as a sound, and so it stays clear of every cue band in this file.
- * Measured: 4.1 dB below level 1's misaligned floor, about -10.0 dB against
- * the calibration reference.
+ * The floor of an enclosed space. Low, so it is felt as enclosure rather than
+ * attended to as a sound, but no longer so low that no phone can render it:
+ * 85 Hz was below what earbuds reproduce and below where the ear has much
+ * sensitivity left, which is a bad place to spend a bed's entire budget.
+ *
+ * Measured A-weighted: -3.5 dB against the calibration reference, 18.3 dB
+ * under level 1's aligned draft, and its energy inside the draft's own critical
+ * band is 3.0 dB BELOW what the draft's misaligned floor puts there — so it
+ * cannot flatten the bottom of the gradient the Seeker hunts along.
+ * That is +23.4 dB on what shipped.
  */
-const STONE = { color: 'brown', filterType: 'lowpass', freq: 85, Q: 0.7, gain: 0.015 };
+const STONE = { color: 'brown', filterType: 'lowpass', freq: 110, Q: 0.7, gain: 0.15 };
 
 /**
- * The same floor, opened out — a valley has one too, and it is bigger.
- * Measured 4.7 dB below level 1's misaligned floor.
+ * The same floor, opened out — a valley has one too, and it is bigger, so it
+ * sits lower and carries further. Level 8's two cues are at 500 and 900 Hz, far
+ * clear of it. Measured -2.9 dB against the reference, 17.6 dB under the cue.
+ * That is +26.7 dB on what shipped.
  */
-const VALLEY = { color: 'brown', filterType: 'lowpass', freq: 70, Q: 0.7, gain: 0.015 };
+const VALLEY = { color: 'brown', filterType: 'lowpass', freq: 95, Q: 0.7, gain: 0.20 };
 
 /**
- * Water, falling somewhere else in the room.
+ * Water, falling somewhere in the room — nowhere in particular in it, now that
+ * events are not positioned.
  *
- * Two drip points rather than one, because one is a metronome and two that
- * never divide into each other are a place. They differ in SPECTRUM, not in
- * level: distance is a spatial statement in this engine and `referenceTrim`
- * exists precisely to stop it writing to the level channel, so a further drip
- * is duller, not quieter. NEAR is a tight small pool, DEEP a wider one.
+ * Two drip voices rather than one, because one is a metronome and two whose
+ * intervals never divide into each other are a place. They differ in SPECTRUM,
+ * not in level, and that is now literally true rather than nearly true: the
+ * nominal gain is identical and the 3.1 dB between them as rendered is the Q 9
+ * bandpass sitting at two different centre frequencies. NEAR is a tight small
+ * pool, DEEP a wider one.
  *
- * Measured over a 50 ms window, against level 1's aligned draft: NEAR lands
- * between -11.7 and -14.1 dB and DEEP between -13.3 and -17.3, the spread
- * being bearing rather than tuning. Even at the loudest placement that is
- * nearly twice the headroom ROOM_CEILING asks for.
+ * Measured A-weighted over the loudest window: NEAR +11.4 dB and DEEP +8.3 dB
+ * against the calibration reference, 3.3 and 6.4 dB under the aligned draft.
+ * Both came down about 2 dB from what shipped — see the block above.
  */
 const DRIP_NEAR = {
-  color: 'white', filterType: 'bandpass', freq: 1900, Q: 9, dur: 0.13, attack: 0.004, gain: 0.25,
+  color: 'white', filterType: 'bandpass', freq: 1900, Q: 9, dur: 0.13, attack: 0.004, gain: 0.20,
 };
 const DRIP_DEEP = {
-  color: 'white', filterType: 'bandpass', freq: 1150, Q: 9, dur: 0.18, attack: 0.006, gain: 0.26,
+  color: 'white', filterType: 'bandpass', freq: 1150, Q: 9, dur: 0.18, attack: 0.006, gain: 0.20,
 };
 
 /**
- * Rock, settling. The rumble the ask named, and the reason it is an event
- * rather than a bed: a 2.6 s swell every minute or so occupies about 4% of the
- * time, so it can be genuinely present without ever being what the Seeker is
- * listening through. Slow attack — it arrives, it does not strike.
+ * Rock, settling. The rumble the ask named twice, and the one element of the
+ * room that was asked for by name and then shipped inaudible: at 90 Hz and
+ * gain 0.05 it rendered 13.8 dB below the Seeker's own reference. It is now
+ * +3.1 dB against it, a raise of 16.9 dB, and it moved up to 120 Hz for the
+ * same reason the bed did — a rumble no transducer reproduces is not a rumble.
  *
- * Measured 13.3 to 14.5 dB under the aligned cue over a 50 ms window. Judged
- * by the event rule rather than the bed rule, which is the one place that
- * distinction is doing real work: at 2.6 seconds it is long enough to argue
- * either way, and it is bounded like an event because it is bounded by its
- * duty cycle, not by sitting under the cue forever.
+ * It stays an event rather than a bed because 2.6 s every forty seconds or so
+ * is a few percent of the time, so it can be genuinely present without ever
+ * being the thing the Seeker is listening through. Slow attack — it arrives,
+ * it does not strike, which is also what keeps it clear of the ember-burst
+ * shape this era must not have.
+ *
+ * The one figure worth watching, and the clearest cost in this whole change:
+ * inside the draft's critical band this lands 7.8 dB above what the misaligned
+ * floor puts there, so for its 2.6 seconds it covers the very bottom of the
+ * alignment gradient. At [30, 60] s that is four to eight percent of a trial.
+ * Reported by the suite rather than bounded by it, because an event's cost in
+ * the cue's band is limited by its duty cycle and a bed's is not — but it is a
+ * cost, it is the reason this is not louder still, and if the gradient's bottom
+ * ever reads as unreliable this is the first constant to look at.
  */
 const SETTLE = {
-  color: 'brown', filterType: 'lowpass', freq: 90, Q: 0.7, dur: 2.6, attack: 0.9, gain: 0.05,
+  color: 'brown', filterType: 'lowpass', freq: 120, Q: 0.7, dur: 2.6, attack: 0.9, gain: 0.24,
 };
-
-/**
- * Where the room's fixed points are. Uniform over the whole circle, on purpose
- * and against the instinct to keep them away from the source: a drip barred
- * from the draft's neighbourhood tells the Seeker where the draft is not,
- * which is an assist, and level 1 has exactly one sanctioned assist already.
- * Uniform is the only placement that leaks nothing in either direction.
- *
- * Fixed for the trial rather than redrawn per firing, because drip points do
- * not move, and because a room that stays put is one that rewards learning it.
- */
-const roomBearing = () => Math.floor(Math.random() * 360);
 
 
 export const FIRST_NARROWING = [
@@ -207,10 +234,11 @@ export const FIRST_NARROWING = [
       s.room = audio.room({
         beds: [STONE],
         events: [
-          { ...DRIP_NEAR, bearing: roomBearing(), every: [8, 15] },
-          { ...DRIP_DEEP, bearing: roomBearing(), every: [11, 21] },
-          // Rare enough that a Seeker may finish a trial without hearing one.
-          { ...SETTLE, bearing: roomBearing(), every: [45, 95] },
+          { ...DRIP_NEAR, every: [5, 11] },
+          { ...DRIP_DEEP, every: [8, 17] },
+          // Still the rare one, but no longer rare enough that a Seeker can
+          // finish a whole trial without ever hearing the rock move.
+          { ...SETTLE, every: [30, 60] },
         ],
       });
       s.voices = [
@@ -410,8 +438,8 @@ export const FIRST_NARROWING = [
       s.room = audio.room({
         beds: [STONE],
         events: [
-          { ...DRIP_NEAR, bearing: roomBearing(), every: [12, 24] },
-          { ...DRIP_DEEP, bearing: roomBearing(), every: [17, 33] },
+          { ...DRIP_NEAR, every: [9, 18] },
+          { ...DRIP_DEEP, every: [13, 25] },
         ],
       });
       s.voices = s.angles.map((a, i) => {
@@ -525,8 +553,8 @@ export const FIRST_NARROWING = [
       // metronome, and this level's own init note says it must not have one.
       s.room = audio.room({
         events: [
-          { ...DRIP_NEAR, bearing: roomBearing(), every: [9, 19] },
-          { ...DRIP_DEEP, bearing: roomBearing(), every: [14, 27] },
+          { ...DRIP_NEAR, every: [8, 17] },
+          { ...DRIP_DEEP, every: [12, 23] },
         ],
       });
 
@@ -603,7 +631,7 @@ export const FIRST_NARROWING = [
       // highpassed tick; it cannot be mistaken for the ember.
       s.room = audio.room({
         beds: [STONE],
-        events: [{ ...SETTLE, bearing: roomBearing(), every: [40, 80] }],
+        events: [{ ...SETTLE, every: [28, 55] }],
       });
     },
 

@@ -129,7 +129,67 @@ async function harness(browser) {
   await page.goto(HARNESS);
 
   await page.evaluate(() => {
-    window.__render = async ({ seconds, sampleRate, seed, windows, windowMs, buildSrc }) => {
+    /* ---------------------------------------------------------------- FFT */
+    /* An in-place radix-2 FFT, used only to weight a spectrum. It exists
+       because the one thing this suite could not previously say is the only
+       thing that mattered: whether a sound is loud enough for a person to
+       notice. See `aWeight`. */
+    const fft = (re, im) => {
+      const n = re.length;
+      for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+      }
+      for (let len = 2; len <= n; len <<= 1) {
+        const ang = -2 * Math.PI / len;
+        const wr = Math.cos(ang), wi = Math.sin(ang);
+        for (let i = 0; i < n; i += len) {
+          let cr = 1, ci = 0;
+          for (let k = 0; k < len / 2; k++) {
+            const ur = re[i + k], ui = im[i + k];
+            const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+            const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+            re[i + k] = ur + vr; im[i + k] = ui + vi;
+            re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+            const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+          }
+        }
+      }
+    };
+
+    /**
+     * IEC 61672 A-weighting, as a magnitude at a frequency.
+     *
+     * THE INSTRUMENT THIS SUITE WAS MISSING, and the reason a room layer shipped
+     * that nobody could hear. Every figure here used to be a flat RMS, which is
+     * a statement about energy and not about audibility — and this game is
+     * played at the threshold, where the two diverge enormously below a few
+     * hundred hertz. The 85 Hz bed that shipped measured 4.7 dB under the cue's
+     * misaligned floor flat and 18.3 dB under it weighted. Flat said "quiet".
+     * Weighted said "gone", and a device agreed with weighted.
+     *
+     * A-weighting is derived from the 40-phon equal-loudness contour, which is
+     * roughly the level this game asks to be played at, so it is the right
+     * curve rather than merely a convenient one. It is still an approximation
+     * of one average listener on unspecified hardware: it does not know what a
+     * phone earbud does below 150 Hz, and it does not model the ear's temporal
+     * integration, which costs a 130 ms drip several dB against a continuous
+     * tone of the same weighted level. Both errors run the same way — they make
+     * short and low sounds look better than they are — so a weighted figure
+     * here is a ceiling on audibility, never a promise of it.
+     */
+    const aWeight = (f) => {
+      const f2 = f * f;
+      const num = 12194 * 12194 * f2 * f2;
+      const den = (f2 + 20.6 * 20.6)
+        * Math.sqrt((f2 + 107.65265 * 107.65265) * (f2 + 737.86223 * 737.86223))
+        * (f2 + 12194 * 12194);
+      return Math.pow(10, (20 * Math.log10(num / den) + 2.0) / 20);
+    };
+
+    window.__render = async ({ seconds, sampleRate, seed, windows, windowMs, buildSrc, weighting, band }) => {
       const mod = await import('/src/engine/audio.js');
 
       const realRandom = Math.random;
@@ -190,12 +250,48 @@ async function harness(browser) {
         win.push({ t: from / sampleRate, rmsL: rms(L, from, to), rmsR: rms(R, from, to) });
       }
 
+      /* The weighted pair, computed on the same samples. `weighting: 'A'` puts
+         the spectrum through the equal-loudness curve above; `band` narrows to
+         one ERB around a centre frequency, which is how a masking question gets
+         asked properly — whether a bed lands in the CUE's auditory filter, not
+         whether it lands somewhere in the octave below it. The two compose:
+         weighting says how loud, band says loud where. */
+      const N = 2048;                       // ~43 ms at 48 kHz
+      const shape = new Float64Array(N / 2);
+      for (let k = 0; k < N / 2; k++) {
+        const f = Math.max(k * sampleRate / N, 1);
+        let g = weighting === 'A' ? aWeight(f) : 1;
+        if (band) {
+          const erb = 24.7 * (1 + 0.00437 * band.freq);   // Glasberg & Moore
+          g *= Math.exp(-0.5 * ((f - band.freq) / (erb / 2)) ** 2);
+        }
+        shape[k] = g;
+      }
+      const frame = (a, from) => {
+        const re = new Float64Array(N), im = new Float64Array(N);
+        for (let i = 0; i < N; i++) re[i] = (a[from + i] || 0) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / N));
+        fft(re, im);
+        let p = 0;
+        for (let k = 1; k < N / 2; k++) p += (re[k] ** 2 + im[k] ** 2) * 2 / (N * N) * shape[k] ** 2;
+        return Math.sqrt(p * (8 / 3));      // Hann power correction
+      };
+      let sMax = 0, sSum = 0, sN = 0, sMaxL = 0, sMaxR = 0;
+      for (let from = 0; from + N <= L.length; from += N / 2) {
+        const l = frame(L, from), r = frame(R, from);
+        const v = Math.sqrt((l * l + r * r) / 2);
+        if (v > sMax) { sMax = v; sMaxL = l; sMaxR = r; }
+        sSum += v * v; sN++;
+      }
+
       return {
         rmsL: rms(L), rmsR: rms(R), peakL: peak(L), peakR: peak(R),
         rms: Math.sqrt((rms(L) ** 2 + rms(R) ** 2) / 2),
         maxWin,
         windows: win,
         frames: L.length,
+        shaped: Math.sqrt(sSum / Math.max(1, sN)),
+        shapedMaxWin: sMax,
+        shapedMaxWinL: sMaxL, shapedMaxWinR: sMaxR,
       };
     };
   });
@@ -209,13 +305,16 @@ async function harness(browser) {
      * file — everything it needs comes through `args`, which arrives as a
      * global `A` inside the build.
      */
-    async render(build, { seconds = 1, sampleRate = 48000, seed = 20260908, windows = 24, windowMs = 50, args = {} } = {}) {
+    async render(build, {
+      seconds = 1, sampleRate = 48000, seed = 20260908, windows = 24, windowMs = 50,
+      args = {}, weighting = null, band = null,
+    } = {}) {
       const out = await page.evaluate(
         ([opts, a]) => {
           window.A = a;
           return window.__render(opts);
         },
-        [{ seconds, sampleRate, seed, windows, windowMs, buildSrc: build.toString() }, args],
+        [{ seconds, sampleRate, seed, windows, windowMs, buildSrc: build.toString(), weighting, band }, args],
       );
       if (errors.length) throw new Error(`page error during render: ${errors.join('; ')}`);
       return out;
@@ -299,6 +398,15 @@ async function harness(browser) {
         },
         [fn.toString(), args],
       );
+      if (errors.length) throw new Error(`page error: ${errors.join('; ')}`);
+      return out;
+    },
+    /** Run the real level contract over a snippet, rather than a copy of it. */
+    async contract(source) {
+      const out = await page.evaluate(async (src) => {
+        const m = await import('/src/levels/contract.js');
+        return m.checkAudioSource(src).map((f) => ({ severity: f.severity, rule: f.rule, message: f.message }));
+      }, source);
       if (errors.length) throw new Error(`page error: ${errors.join('; ')}`);
       return out;
     },
@@ -711,19 +819,60 @@ try {
   });
 
   /* ------------------------------------------------------------------ */
-  group('The room: a space that never competes with the cue');
+  /* The heading used to read "a space that never competes with the cue", which
+     was the rule that made the room inaudible: it bounded scenery against a cue
+     state that is itself below hearing. The room competes now, deliberately and
+     within a stated bound, and the cue still wins by 12 dB or more. */
+  group('The room: a space you can hear, that the cue still wins');
 
-  /* The two yardsticks every room number in this file is quoted against, and
-     the reason they are rendered rather than written down: a gain constant
-     does not predict a level on a broadband source. Level 1's own draft at
-     the two ends of its alignment curve. */
-  const l1 = (gain, freq, Q) => h.render(({ audio }) => {
+  /* The yardsticks every room number is quoted against, rendered rather than
+     written down — a gain constant does not predict a level on a broadband
+     source. Level 1's own draft at the two ends of its alignment curve, plus
+     the calibration reference, which is the only absolute point in the mix:
+     the Seeker sets device volume so that tone is barely there, so 0 dB
+     against it is "just audible" and a negative number is not.
+     `A` variants are A-weighted — see `aWeight` in the harness for why every
+     room figure below is quoted from those and not from the flat ones. */
+  const l1 = (gain, freq, Q, o = {}) => h.render(({ audio }) => {
     audio.voice(0, { color: 'brown', filterType: 'bandpass', freq: A.freq, Q: A.Q, gain: A.gain });
-  }, { args: { gain, freq, Q }, seconds: 3 });
+  }, { args: { gain, freq, Q }, seconds: 3, ...o });
   const cueAligned = (await l1(0.52, 340, 3.8)).rms;
   const cueFloor = (await l1(0.02, 300, 0.6)).rms;
+  const cueAlignedA = (await l1(0.52, 340, 3.8, { weighting: 'A' })).shaped;
+  const cueFloorA = (await l1(0.02, 300, 0.6, { weighting: 'A' })).shaped;
+  /* The cue's own critical band, and what the cue's quietest state puts in it.
+     The masking question is asked here and nowhere else. */
+  const CUE_BAND = { freq: 340 };
+  const cueFloorInBand = (await l1(0.02, 300, 0.6, { band: CUE_BAND })).shaped;
+  const referenceA = (await h.render(({ audio }) => { audio.calibrationTone(40); },
+    { seconds: 3, weighting: 'A' })).shaped;
   const levels = await h.levelData();
   const withRooms = levels.filter((lv) => lv.beds.length || lv.events.length);
+
+  await t('the weighted measure and the flat one disagree, and by how much', async () => {
+    /* Not a pass/fail so much as the case that explains every other number in
+       this group. This suite measured flat for its whole life and reported a
+       room correctly placed under the cue; the room was inaudible on a real
+       device. The gap below is the whole defect, and it is a property of the
+       spectrum rather than of the tuning — which is why it could not be seen by
+       reading gain constants, and why it is printed here every run. */
+    const rows = [];
+    for (const [name, o] of [
+      ['85 Hz bed (as shipped)', { color: 'brown', filterType: 'lowpass', freq: 85, Q: 0.7, gain: 0.015 }],
+      ['110 Hz bed (now)', withRooms.find((lv) => lv.id === 1).beds[0]],
+    ]) {
+      const flat = await h.render(({ audio }) => { audio.ambient(A.b).level(A.b.gain, 0.001); }, { args: { b: o }, seconds: 3 });
+      const wtd = await h.render(({ audio }) => { audio.ambient(A.b).level(A.b.gain, 0.001); }, { args: { b: o }, seconds: 3, weighting: 'A' });
+      rows.push({ name, flat: dBBetween(flat.rms, cueFloor), wtd: dBBetween(wtd.shaped, cueFloorA) });
+    }
+    const rel = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)} dB`;
+    for (const r of rows) {
+      console.log(`          ${r.name}: ${rel(r.flat)} against the misaligned floor flat,`
+        + ` ${rel(r.wtd)} weighted — the two disagree by ${Math.abs(r.flat - r.wtd).toFixed(1)} dB`);
+    }
+    assert(Math.abs(rows[0].flat - rows[0].wtd) > 8,
+      'the two measures agree on a sub-bass bed — then one of them is not doing what this case claims');
+  });
 
   await t('a room belongs to the space its level is actually in', async () => {
     /* Pinned deliberately, and it is a design decision rather than a physical
@@ -760,53 +909,191 @@ try {
     assert(got.keys === 'stop,update', `room() exposes ${got.keys} — expected stop,update`);
   });
 
-  await t("the room's loudest moment stays under the cue at full alignment", async () => {
-    /* The rule that keeps a drip from becoming the loudest thing in the First
-       Narrowing, which is the shape of a defect this project has already
-       shipped once (the ember burst on error, at radius 1). Measured over
-       ~50 ms rather than over the whole render, because that is the window in
-       which a transient can mask a steady sound; comparing a 130 ms drip's
-       full-render RMS to a draft's would flatter it by an order of magnitude
-       and prove nothing. */
+  await t('every room event is loud enough to notice and quiet enough to ignore', async () => {
+    /* Both halves, because this layer has now failed in both directions. It
+       shipped under a rule that bounded it against the cue's misaligned floor
+       and was therefore inaudible on a device; and the same run that found that
+       out found DRIP_NEAR sitting 1.4 dB under the aligned draft weighted,
+       effectively tied with the loudest thing in the level, while the flat
+       figure said a comfortable -9.9.
+
+       So: above the calibration reference, which is the Seeker's own
+       just-audible point and the only absolute anchor in this mix; and under
+       the aligned cue by ROOM_CEILING.eventBelowCue, because the thing the
+       Seeker steers toward must stay the peak of the mix. Measured over the
+       loudest ~43 ms window — a transient's moment, not its average. */
     const { ROOM_CEILING } = await h.constants();
     for (const lv of withRooms) {
       for (const e of lv.events) {
-        const m = await h.render(({ audio }) => { audio.burst(A.e); }, {
-          args: { e: { ...e, angleDeg: e.bearing } }, seconds: Math.max(1, (e.dur || 0.3) + 0.4),
-        });
-        const over = dBBetween(m.maxWin, cueAligned);
-        /* The same spec measures differently at different bearings — the HRTF
-           is worth about 2.5 dB across the circle — so these figures are one
-           sample of a band, not a constant. Deterministic here only because
-           `levelData` seeds the bearings; on a device they are redrawn each
-           trial, which is why the margins are generous. */
-        console.log(`          level ${lv.id} ${e.freq} Hz event: ${over.toFixed(1)} dB against the aligned cue`);
-        assert(over <= -ROOM_CEILING.eventBelowCue,
-          `level ${lv.id}'s ${e.freq} Hz room event is ${over.toFixed(1)} dB from the aligned cue — the ceiling is -${ROOM_CEILING.eventBelowCue}`);
+        const secs = Math.max(1, (e.dur || 0.3) + 0.6);
+        const m = await h.render(({ audio }) => { audio.burst({ ...A.e, positioned: false }); },
+          { args: { e }, seconds: secs, weighting: 'A' });
+        const inBand = await h.render(({ audio }) => { audio.burst({ ...A.e, positioned: false }); },
+          { args: { e }, seconds: secs, band: CUE_BAND });
+        const overCue = dBBetween(m.shapedMaxWin, cueAlignedA);
+        const overRef = dBBetween(m.shapedMaxWin, referenceA);
+        /* Reported, not bounded. An event's cost inside the cue's band is
+           limited by its duty cycle, which is a few percent; a bed's is not,
+           and that one IS bounded, below. The settle is the figure to watch:
+           for its 2.6 seconds it does cover the very bottom of the gradient. */
+        console.log(`          level ${lv.id} ${e.freq} Hz event: ${overRef >= 0 ? '+' : ''}${overRef.toFixed(1)} dB re the reference,`
+          + ` ${overCue.toFixed(1)} dB under the aligned cue,`
+          + ` ${dBBetween(inBand.shapedMaxWin, cueFloorInBand).toFixed(1)} dB re the floor inside the cue's band`);
+        assert(overCue <= -ROOM_CEILING.eventBelowCue,
+          `level ${lv.id}'s ${e.freq} Hz event is ${overCue.toFixed(1)} dB from the aligned cue — the ceiling is -${ROOM_CEILING.eventBelowCue}`);
+        assert(overRef > 0,
+          `level ${lv.id}'s ${e.freq} Hz event is ${overRef.toFixed(1)} dB against the reference — at or under the Seeker's own just-audible point`);
       }
     }
   });
 
-  await t("the room's bed stays under the cue at its quietest", async () => {
-    /* The stricter of the two rules and the one that protects the first minute
-       of level 1. A bed runs continuously, so it is judged against the cue at
-       its WORST — the misaligned floor — and not against the cue at its best.
-       A room louder than the cue in a misaligned moment is a room that has
-       replaced the mechanic with scenery.
+  await t('every room bed is a floor the Seeker can feel, and only a floor', async () => {
+    /* Three bounds, and the third is the one doing the real work.
+
+       Broadband the bed is judged against the cue at FULL alignment, not
+       against its misaligned floor. That is a named relaxation of a stated
+       pillar — see ROOM_CEILING — and it is why these beds are 23 to 27 dB
+       louder than the ones that shipped: the old rule compared the room to a
+       cue state that is itself below audibility, so the only bed that passed
+       was one nobody could hear.
+
+       What replaces it is per-band. A bed can only damage the mechanic by
+       putting energy in the CUE's auditory filter, where it would flatten the
+       bottom of the gradient the Seeker hunts along, and that is measurable
+       directly rather than approximated by a broadband bound. These beds put
+       less into the draft's band than the draft's own quietest state does.
 
        Rendered with an instant ramp rather than `room()`'s 1.5 s fade: the
        rule is about the bed's steady level, and the fade is a shape. */
     const { ROOM_CEILING } = await h.constants();
     for (const lv of withRooms) {
       for (const b of lv.beds) {
-        const m = await h.render(({ audio }) => { audio.ambient(A.b).level(A.b.gain, 0.001); },
-          { args: { b }, seconds: 3 });
-        const over = dBBetween(m.rms, cueFloor);
-        console.log(`          level ${lv.id} ${b.freq} Hz bed: ${over.toFixed(1)} dB against the misaligned floor`);
-        assert(over <= -ROOM_CEILING.bedBelowFloor,
-          `level ${lv.id}'s ${b.freq} Hz bed is ${over.toFixed(1)} dB from the misaligned floor — the ceiling is -${ROOM_CEILING.bedBelowFloor}`);
+        const bed = ({ audio }) => { audio.ambient(A.b).level(A.b.gain, 0.001); };
+        const m = await h.render(bed, { args: { b }, seconds: 3, weighting: 'A' });
+        const inBand = await h.render(bed, { args: { b }, seconds: 3, band: CUE_BAND });
+        const underCue = dBBetween(m.shaped, cueAlignedA);
+        const reRef = dBBetween(m.shaped, referenceA);
+        const inCue = dBBetween(inBand.shaped, cueFloorInBand);
+        console.log(`          level ${lv.id} ${b.freq} Hz bed: ${reRef >= 0 ? '+' : ''}${reRef.toFixed(1)} dB re the reference,`
+          + ` ${underCue.toFixed(1)} dB under the aligned cue, ${inCue.toFixed(1)} dB re the floor inside the cue's band`);
+        assert(underCue <= -ROOM_CEILING.bedBelowCue,
+          `level ${lv.id}'s ${b.freq} Hz bed is ${underCue.toFixed(1)} dB from the aligned cue — the ceiling is -${ROOM_CEILING.bedBelowCue}`);
+        assert(inCue <= -ROOM_CEILING.bedInCueBand,
+          `level ${lv.id}'s ${b.freq} Hz bed puts ${inCue.toFixed(1)} dB into the cue's own band against its floor`
+          + ` — the ceiling is -${ROOM_CEILING.bedInCueBand}, and above it the alignment gradient loses its bottom`);
+        /* A bed is enclosure, not an event: it is meant to sit at or just under
+           the Seeker's own just-audible point and be noticed when it stops. */
+        assert(reRef < 3,
+          `level ${lv.id}'s ${b.freq} Hz bed is ${reRef.toFixed(1)} dB over the reference — a floor should not be a foreground`);
       }
     }
+  });
+
+  await t('a room event carries no direction, and the cue carries all of it', async () => {
+    /* The guarantee, measured against the thing it has to be distinguishable
+       from. This game rests on there being exactly ONE bearing worth finding
+       per level. Room events used to be panned to a point drawn once per trial:
+       un-gated by alignment, but still carrying ITD, ILD and pinna colouration
+       — a second compass, and a careful Seeker had no way to know which of the
+       two directional signals the level meant. "It does not get quieter when
+       you look away" was never the same promise as "it has no direction to look
+       away from", and only the second one is safe.
+
+       Varied by LISTENER YAW rather than by bearing, because a non-positioned
+       event has no bearing to vary. The cue is the control: same render, same
+       measure, and its ear balance has to swing while the room's does not. */
+    const balance = (m) => dBBetween(m.rmsR, m.rmsL);
+    const spec = withRooms.find((lv) => lv.id === 1);
+    const drips = [];
+    const drafts = [];
+    for (const yaw of [0, 45, 90, 180, 270]) {
+      const ev = await h.render(({ audio }) => {
+        audio.setListenerYaw(A.yaw);
+        audio.burst({ ...A.e, positioned: false });
+      }, { args: { yaw, e: spec.events[0] }, seconds: 1 });
+      const cue = await h.render(({ audio }) => {
+        audio.setListenerYaw(A.yaw);
+        audio.voice(90, { color: 'brown', filterType: 'bandpass', freq: 420, Q: 0.7, gain: 0.5 });
+      }, { args: { yaw }, seconds: 2 });
+      drips.push(balance(ev));
+      drafts.push(balance(cue));
+    }
+    const swing = (a) => Math.max(...a) - Math.min(...a);
+    console.log(`          a drip across five listener yaws: ${swing(drips).toFixed(2)} dB of ear-balance swing`
+      + `; the draft across the same five: ${swing(drafts).toFixed(2)} dB`);
+    assert(swing(drips) < 0.2,
+      `a room event's ear balance moves ${swing(drips).toFixed(2)} dB as the Seeker turns — it is carrying a bearing`);
+    assert(swing(drafts) > 4,
+      `precondition: the cue should swing hard with facing, measured ${swing(drafts).toFixed(2)} dB`);
+  });
+
+  await t('a non-positioned burst is not trimmed to the plane twice', async () => {
+    /* The defect this project keeps rediscovering, in its other sign.
+       `referenceTrim` puts a PANNED voice back on the reference plane after
+       `distance` moved it off. `nonPositioned` is already trimmed to that same
+       plane, once, in `init()`. Applying the trim on top of it would attenuate
+       a room event by a second flat 1/6 — about -15.6 dB — and the room would
+       go quiet again for a reason nobody could see in the source, which is
+       precisely how the last three of these shipped.
+
+       What is left between the two paths is the HRTF's own insertion loss,
+       which is real and small; the case that measures it directly is above. */
+    const e = { color: 'white', filterType: 'bandpass', freq: 1900, Q: 9, dur: 0.13, attack: 0.004, gain: 0.2 };
+    const positioned = await h.render(({ audio }) => { audio.burst({ ...A.e, angleDeg: 0 }); }, { args: { e }, seconds: 1 });
+    const room = await h.render(({ audio }) => { audio.burst({ ...A.e, positioned: false }); }, { args: { e }, seconds: 1 });
+    const gap = dBBetween(room.maxWin, positioned.maxWin);
+    console.log(`          the same burst, two routings: ${gap >= 0 ? '+' : ''}${gap.toFixed(2)} dB`
+      + ' (a second trim would read about -15.6)');
+    assert(Math.abs(gap) < 2.5,
+      `a non-positioned burst is ${gap.toFixed(2)} dB from a positioned one — that is a trim applied twice, not an HRTF`);
+  });
+
+  await t('a room spec that names a bearing is refused by the contract', async () => {
+    /* The rule has to be enforced somewhere a developer meets it, and `room()`
+       simply ignoring a stray `bearing` is the worst outcome: it reads as
+       deliberate placement and does nothing at all. Checked here against the
+       real checker so the two cannot drift apart. */
+    const bad = await h.contract('s.room = audio.room({ events: [{ ...DRIP, bearing: 40, every: [5, 9] }] });');
+    const ok = await h.contract('s.room = audio.room({ events: [{ ...DRIP, every: [5, 9] }] });');
+    const rules = (f) => f.map((x) => x.rule);
+    assert(rules(bad).includes('audio-routing'), `a bearing in a room spec was not caught: ${JSON.stringify(bad)}`);
+    assert(bad.every((f) => f.severity === 'error'), 'a bearing in a room spec must block, not warn');
+    assert(!rules(ok).includes('audio-routing'), `a clean room spec was flagged: ${JSON.stringify(ok)}`);
+  });
+
+  await t('a room establishes itself early, then keeps its own time', async () => {
+    /* `lead` exists because a room that opens with its longest silence is a
+       room the Seeker has already concluded is not there. Level 1's first drip
+       could previously be 15 seconds away, and a Seeker testing for under a
+       minute could reasonably meet a "cave" that dripped once.
+
+       It changes WHEN the first event lands and nothing else — the steady-state
+       spacing is untouched, and it is still transport time, so this is not a
+       reward arriving sooner, it is furniture being in the room when the lights
+       come up. Driven here at a coarse step to prove the timing rather than the
+       audio, so it stays fast. */
+    const first = await h.engine(({ audio }) => {
+      const fired = [];
+      const real = audio.burst.bind(audio);
+      audio.burst = (o) => { fired.push(o); };
+      const r = audio.room({ events: [{ color: 'white', freq: 1900, every: [8, 15] }] });
+      let firstAt = null;
+      for (let t2 = 0; t2 <= 30; t2 += 0.05) {
+        const before = fired.length;
+        r.update(t2);
+        if (firstAt === null && fired.length > before) firstAt = t2;
+      }
+      audio.burst = real;
+      return { firstAt, count: fired.length, positioned: fired.map((o) => o.positioned) };
+    });
+    console.log(`          an [8,15] s event first fires at ${first.firstAt.toFixed(1)} s`
+      + ` and ${first.count} times in 30 s`);
+    assert(first.firstAt < 8,
+      `the first event waits ${first.firstAt.toFixed(1)} s — a room should not open with its longest silence`);
+    assert(first.firstAt > 0.5,
+      `the first event fires at ${first.firstAt.toFixed(1)} s — a room arrives, it does not greet the Seeker`);
+    assert(first.positioned.every((p) => p === false),
+      'room() fired a positioned event — the room must have no bearing at all');
   });
 
   await t('the room gets quieter on later trials, so its headroom is constant', async () => {
@@ -827,13 +1114,13 @@ try {
       audio.setAudioScale(A.scale);
       const r = audio.room({ events: [{ ...A.e, every: [0.1, 0.1] }] });
       at(0.2, () => r.update(1));
-    }, { args: { scale, e: { ...spec.events[0], bearing: 0 } }, seconds: 1 });
+    }, { args: { scale, e: spec.events[0] }, seconds: 1 });
     near(dBBetween((await bedAt(trial3)).rms, (await bedAt(1)).rms), dB(trial3), 0.3,
       `the room bed at trial-3 scale (${trial3})`);
     near(dBBetween((await eventAt(trial3)).maxWin, (await eventAt(1)).maxWin), dB(trial3), 0.5,
       `a room event at trial-3 scale (${trial3})`);
     console.log(`          headroom against the cue is therefore the same on all ${TRIAL_AUDIO_SCALE.length} trials`
-      + ` (bed -${ROOM_CEILING.bedBelowFloor} dB, events -${ROOM_CEILING.eventBelowCue} dB or better)`);
+      + ` (bed -${ROOM_CEILING.bedBelowCue} dB, events -${ROOM_CEILING.eventBelowCue} dB or better)`);
   });
 
   await t("level 6's five depths arrive on one ladder, not on five", async () => {
