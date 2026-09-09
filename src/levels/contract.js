@@ -231,6 +231,70 @@ export function checkAudioSource(source, label = 'level source') {
   return out;
 }
 
+/**
+ * The field's word, read from the level's own source text.
+ *
+ * `.snd-breath-word` is the one line a level publishes while it is played, and
+ * for the whole life of the first ten levels it was a live quantizer on the
+ * exact hidden scalar the Seeker was supposed to estimate by ear — `align > 0.6
+ * ? 'closer' : ...` on the hold levels, `s.temp > 80 ? 'too hot' : ...` on the
+ * forge. This is the orb's removed `scale(orbScale)` one element over, and it
+ * is worse in one respect: it is sampled every frame, so a sweep reads the
+ * BOUNDARY CROSSINGS rather than one rung, and `.snd-heading-cue` prints the
+ * degrees to plot them against. The committed e2e harness drove level 1 and
+ * level 9 to their marks off this channel with no ears at all.
+ *
+ * The rule is that the word reports what has been EARNED — cumulative presence,
+ * which the meter already draws — and never what is being estimated. Two shapes
+ * are refused, and both are ways of writing a threshold on a live scalar:
+ *
+ *   1. Naming the alignment family inside the call. `align`, `aligned`,
+ *      `trueAlign`, `alignment(...)`, `angleDiff(...)` — every one of these is
+ *      the bearing the level exists to hide.
+ *   2. Comparing anything to a numeric literal inside the call. This is how
+ *      every leak in the file was actually written, including the two that
+ *      never mention alignment by name (level 4's `s.sync > 75` and level 9's
+ *      `s.temp > 80`, a phase detector and a thermometer respectively).
+ *
+ * Thresholds belong in a fixed ladder the level declares, indexed by earned
+ * progress — see `ladderWord` in first-narrowing.js. A word that needs a
+ * comparison to choose itself is reporting something live, which is the defect.
+ *
+ * Blunt on purpose, and it will occasionally refuse something innocent; the
+ * alternative is running every level's frame loop against a moving listener,
+ * and blunt-and-run-every-commit beats precise-and-run-never. Level 2 is the
+ * worked example of what stays legal: `eventActive ? 'something stirs' :
+ * 'listening'` names no bearing and thresholds nothing.
+ */
+export function checkWordSource(source, label = 'level source') {
+  const out = [];
+  const line = (idx) => source.slice(0, idx).split('\n').length;
+
+  for (const m of source.matchAll(/\bsetWord\s*\(/g)) {
+    let depth = 0;
+    let end = m.index + m[0].length - 1;
+    for (; end < source.length; end++) {
+      if (source[end] === '(') depth++;
+      else if (source[end] === ')' && --depth === 0) break;
+    }
+    const body = source.slice(m.index + m[0].length, end);
+
+    const bearing = body.match(/\b\w*[Aa]lign\w*\b|\bangleDiff\b/);
+    if (bearing) {
+      out.push(err(`${label}:${line(m.index)}`, 'word-readout',
+        `setWord names \`${bearing[0]}\` — the field's word would report the bearing the level `
+        + 'hides, every frame. Index a declared ladder by earned progress instead'));
+    }
+    const threshold = body.match(/[<>]=?\s*-?\d|-?\d\s*[<>]=?[^=]/);
+    if (threshold) {
+      out.push(err(`${label}:${line(m.index)}`, 'word-readout',
+        `setWord thresholds a live value (\`${threshold[0].trim()}\`) — a word chosen by comparison `
+        + 'is a readout of whatever is being compared. Put the thresholds in the ladder, not the call'));
+    }
+  }
+  return out;
+}
+
 /** Run every structural check over a registry. Source checks are separate. */
 export function checkLevels(eras) {
   const findings = [];

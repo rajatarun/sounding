@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { ERAS, BUILT_IDS, TOTAL_LEVELS, buildStatus } from '../src/levels/registry.js';
-import { checkLevels, checkAudioSource } from '../src/levels/contract.js';
+import { checkLevels, checkAudioSource, checkWordSource } from '../src/levels/contract.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const levelsDir = resolve(here, '../src/levels');
@@ -20,6 +20,7 @@ const findings = checkLevels(ERAS);
 for (const era of ERAS) {
   const src = readFileSync(resolve(levelsDir, era.module), 'utf8');
   findings.push(...checkAudioSource(src, era.module));
+  findings.push(...checkWordSource(src, era.module));
 }
 
 const errors = findings.filter((f) => f.severity === 'error');
