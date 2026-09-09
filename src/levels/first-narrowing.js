@@ -232,7 +232,71 @@ const SETTLE = {
  * silently — pillar 3 still holds, a wrong (or too-fast) commit costs
  * nothing — it just can't be repeated fast enough to substitute for
  * listening.
+ *
+ * AND THEN THE COMMIT ANSWER ITSELF WAS THE LEAK. Removing the per-wrong-
+ * commit reset made a wrong commit free, which is right; what it also did was
+ * make the commit answer a free oracle, which is not. The three answers used
+ * to decompose the Seeker's assertion into its two halves and report each
+ * separately: "only the wind" whenever no rhythm was sounding, "close — keep
+ * listening" whenever one was and the aim was off. So a single press at the
+ * first instant of any event named its class, with no listening, no aim and
+ * no wait — the same ground truth that had just been taken off
+ * `.snd-breath-word` for exactly that reason, moved one channel over and
+ * gated behind one keypress instead of zero.
+ *
+ * That is a pillar-3 defect and NOT a clear-rate exploit, and the difference
+ * matters for what the fix has to be. Commits are free, so knowing which kind
+ * of event is sounding buys almost no wall-clock: a blind masher at the 1.0 s
+ * floor lands a commit with probability P(a rhythm is sounding) × P(inside
+ * tolerance) = 0.247 × (40/360) = 0.0275, so ~109 dispatches — about 109 s of
+ * uninterrupted mashing — for the three this trial needs, with or without the
+ * leak. (Duty cycle: mean event 0.4 × 5.78 + 0.6 × 0.9 = 2.85 s against a mean
+ * 6.5 s idle gap; rhythms occupy 2.312/9.352 = 0.247 of the clock.) What the
+ * leak actually cost was the Discipline: two Seekers with genuinely different
+ * ears cleared at the same rate, because the classification FILTER exists to
+ * train was being handed over rather than heard.
+ *
+ * THE FIX IS THAT A COMMIT ANSWERS THE WHOLE ASSERTION OR NOTHING. A commit
+ * says "there is a true rhythm, and it is *there*"; the level confirms that
+ * conjunction or it does not, and it never reports the halves separately.
+ * Every way of not landing — nothing sounding, a leaf, or the true rhythm at a
+ * bearing outside `tolerance` — answers with the one string below.
+ *
+ * Measured as information: a blind press used to carry the full H(0.4) = 0.971
+ * bits of the event's class. It now carries 0.061 bits — P(rhythm) moves 0.400
+ * → 0.372 on a miss — and that residue is only the fact that succeeding is
+ * itself evidence, which is not a leak but the task being done.
+ *
+ * The Seeker loses nothing they were entitled to. "Am I getting warmer?" is
+ * still answered inside the same episode, by `thudGain`, at 0.46 s resolution,
+ * in the channel this level is about — nine footfalls whose gain reads the
+ * live alignment. The old "close" flash was a redundant, silent, visual copy
+ * of that channel that also gave away the half the ear was supposed to earn.
+ * Moving the answer out of text and back into the mechanic is pillar 1.
  */
+
+/**
+ * The answer to a commit that did not land. ONE string for every way of not
+ * landing, and the sameness is the mechanic — not a shortage of copy.
+ *
+ * Do not split it back into a per-cause set, however much better three
+ * specific answers read than one general one. Anything that distinguishes
+ * "no rhythm was sounding" from "a rhythm was sounding and you were aimed
+ * wrong" hands over the classification this level exists to ask for by ear.
+ * `scripts/ui.e2e.mjs` § 'a commit does not say which kind of event is
+ * sounding' is the guard, and it is written against the two cases being
+ * indistinguishable, not against any particular wording.
+ *
+ * It is deliberately about the Seeker's act and silent about the world:
+ * "nothing noticed", not "only the wind". A Seeker who correctly heard the
+ * rhythm and simply aimed 30° off is not wrong about the clearing, and a
+ * level whose whole job is teaching that judgement must not tell them they
+ * were. It also keeps the briefing's own promise verbatim — "if you are
+ * mistaken, nothing is lost — simply keep listening" — and pairs with the
+ * commit label ("I notice this") and the success answer ("noticed, clearly"),
+ * so all three sit on one verb and the contrast between them is legible.
+ */
+const COMMIT_MISS = 'nothing noticed — keep listening';
 const RHYTHM_STEPS = 3;        // footfalls per stride — unchanged, this is
                                 // the pattern ("the regularity IS the tell")
 const RHYTHM_STRIDE = 0.46;    // seconds between footfalls — unchanged
@@ -463,28 +527,39 @@ export const FIRST_NARROWING = [
     },
 
     onCommit(s, ctx) {
-      if (s.phase !== 'rhythm') { ctx.flash('only the wind'); return; }
+      // A commit asserts BOTH halves at once — "there is a true rhythm, and it
+      // is there" — so it is tested as one conjunction and answered as one
+      // thing. The three cases that fail it (nothing sounding, a leaf, the
+      // rhythm at a bearing outside tolerance) are deliberately not told
+      // apart; see COMMIT_MISS. Keep this a single branch: written as an early
+      // return per cause, the next edit that wants a kinder message for one of
+      // them reopens the oracle without anyone noticing.
+      const landed = s.phase === 'rhythm'
+        && angleDiff(ctx.yaw, s.angle) <= this.tolerance;
 
-      if (angleDiff(ctx.yaw, s.angle) <= this.tolerance) {
-        s.found++;
-        ctx.audio.burst({
-          angleDeg: s.angle, color: 'crackle', filterType: 'highpass',
-          freq: 900, dur: 0.4, gain: 0.22,
-        });
-        s.phase = 'idle';
-        s.nextAt = ctx.elapsed + 3;
-        ctx.flash('noticed, clearly');
-        if (s.found >= this.required) ctx.complete();
-      } else {
-        // The rhythm keeps sounding rather than ending the episode on one
-        // wrong guess. The briefing already promises "if you are mistaken,
-        // nothing is lost — simply keep listening"; ending the episode here
-        // made that false the moment anyone acted on it, because the only
-        // thing left to "keep listening" to was silence. Now a Seeker who
-        // turned too far can hear the same footfalls, correct, and commit
-        // again before this episode's own window closes.
-        ctx.flash('close — keep listening');
+      if (!landed) {
+        // Nothing else changes. The episode, if one is sounding, keeps
+        // sounding rather than ending on a wrong guess — the briefing promises
+        // "if you are mistaken, nothing is lost — simply keep listening", and
+        // ending it here made that false the moment anyone acted on it,
+        // because the only thing left to keep listening to was silence. A
+        // Seeker who turned too far hears the same footfalls, hears them come
+        // up as they turn back (thudGain), and can commit again inside this
+        // episode's own window. That warming is now the only answer to "was
+        // that a rhythm, and where?" — which is the point.
+        ctx.flash(COMMIT_MISS);
+        return;
       }
+
+      s.found++;
+      ctx.audio.burst({
+        angleDeg: s.angle, color: 'crackle', filterType: 'highpass',
+        freq: 900, dur: 0.4, gain: 0.22,
+      });
+      s.phase = 'idle';
+      s.nextAt = ctx.elapsed + 3;
+      ctx.flash('noticed, clearly');
+      if (s.found >= this.required) ctx.complete();
     },
 
     completionText: () => ({

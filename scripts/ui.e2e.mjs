@@ -964,7 +964,9 @@ try {
        absolute` to any of the three is one edit and would silently restore the
        old failure mode; here it fails a test instead. */
     const seen = [];
-    for (const level of [1, 2, 4, 9]) {
+    /* 1 (hold), 2 and 7 (commit — two turn controls plus a wide commit button,
+       the widest controls row in the game) and 4, 9 (breathe). */
+    for (const level of [1, 2, 4, 7, 9]) {
       for (const vp of [PHONE, SMALL]) {
         const { ctx, page } = await open({
           config: false, viewport: vp,
@@ -1038,7 +1040,7 @@ try {
         seen.push(`${where}: ${m.rows.map((r) => r.cls.replace('snd-', '')).join(' → ')}`);
       }
     }
-    assert(seen.length === 8, `only ${seen.length} of 8 level/viewport pairs were measured`);
+    assert(seen.length === 10, `only ${seen.length} of 10 level/viewport pairs were measured`);
   });
 
   await t('the orb carries no continuous reading, and no Force signature could restore one', async () => {
@@ -1489,6 +1491,571 @@ try {
     assert(
       spoke.length === 1 && spoke[0] === WELCOME,
       `speech was asked for ${JSON.stringify(spoke)} rather than the line, once`,
+    );
+  });
+
+  /* ------------------------------------------------------------------ */
+  group('The commit path: level 2\'s rhythm, and the floor under it');
+
+  /**
+   * Level 2 draws two coins per event — the bearing (`floor(r * 360)`) and
+   * whether the event is the true rhythm (`r < 0.4`) — so pinning
+   * `Math.random` pins both, and a case can say which kind of event is
+   * sounding and where it is. This is the only way a harness with no ears can
+   * play a level whose whole task is telling one sound from another; it does
+   * not give the *page* anything it would not otherwise have, it gives the
+   * *test* the ground truth it needs to assert against.
+   *
+   *   AHEAD  (0)   every event is the rhythm at 0°, which is where a Seeker
+   *                who has just had `steering.reset()` is already facing — so
+   *                a correctly aimed commit needs no steering at all.
+   *   OFFSET (0.3) every event is the rhythm at 108°, well outside the 20°
+   *                tolerance from a standing start.
+   *   LEAF   (0.5) every event is a leaf decoy at 180°.
+   */
+  const AHEAD = 0;
+  const OFFSET = 0.3;
+  const OFFSET_TURNS = 14;   // 14 × 8° = 112°, four degrees off 108
+  const LEAF = 0.5;
+
+  /**
+   * Every answer level 2 gives a commit it actually dispatched — used to count
+   * dispatches from outside the level, so it has to stay exhaustive.
+   *
+   * There are two, not three, and that is the mechanic rather than an omission:
+   * a commit answers the whole assertion ("a true rhythm, and it is there") or
+   * it answers nothing, so every way of missing — no event, a leaf, the rhythm
+   * at a bearing outside tolerance — reads the same. Splitting it back into a
+   * per-cause set would classify the event for a Seeker who never listened.
+   */
+  const COMMIT_ANSWERS = ['noticed, clearly', 'nothing noticed — keep listening'];
+
+  /**
+   * Every burst the engine really starts: transport time, the filter frequency
+   * that burst was built with (level 2's footfall is the only 150 Hz voice in
+   * it) and the peak its gain envelope ramps to. Read off the Web Audio graph
+   * rather than off the level's constants, because the question is what the
+   * running engine scheduled, not what the arithmetic says it would.
+   */
+  const AUDIO_PROBE = () => {
+    window.__bursts = [];
+    window.__ramps = [];
+    const realRamp = AudioParam.prototype.linearRampToValueAtTime;
+    AudioParam.prototype.linearRampToValueAtTime = function (v, at) {
+      window.__ramps.push(v);
+      return realRamp.call(this, v, at);
+    };
+    const BC = (window.BaseAudioContext || window.AudioContext).prototype;
+    const realFilter = BC.createBiquadFilter;
+    BC.createBiquadFilter = function () {
+      const node = realFilter.call(this);
+      window.__lastFilter = node;
+      return node;
+    };
+    const realStart = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      /* burst() builds filter → gain envelope → start, in that order, so the
+         ramps banked since the last start belong to this burst. */
+      const peaks = window.__ramps.splice(0);
+      window.__bursts.push({
+        t: this.context.currentTime,
+        freq: window.__lastFilter ? window.__lastFilter.frequency.value : null,
+        peak: peaks.length ? Math.max(...peaks) : 0,
+      });
+      return realStart.apply(this, args);
+    };
+  };
+
+  /**
+   * Every value the bearing readout ever holds, stamped. A MutationObserver
+   * rather than a poll: a flash that the next turn overwrites inside the same
+   * frame still has to be counted, and counting flashes is how many commits
+   * the level actually saw is measured from outside it.
+   */
+  const HEADING_LOG = () => {
+    window.__headings = [];
+    window.__t0 = performance.now();
+    const attach = () => {
+      const el = document.querySelector('.snd-heading-cue');
+      if (!el) { requestAnimationFrame(attach); return; }
+      const push = () => window.__headings.push({
+        text: el.textContent, at: Math.round(performance.now() - window.__t0),
+      });
+      push();
+      new MutationObserver(push).observe(el, { childList: true, characterData: true, subtree: true });
+    };
+    attach();
+  };
+
+  /** Straight into one level's first trial, with the page scripted first. */
+  async function enterLevel(level, {
+    rnd, viewport = PHONE, reducedMotion, forcedColors, instrument = [],
+  } = {}) {
+    const it = await open({
+      config: false, viewport, reducedMotion, forcedColors,
+      progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
+    });
+    for (const script of instrument) await it.page.addInitScript(script);
+    if (rnd !== undefined) await it.page.addInitScript((v) => { Math.random = () => v; }, rnd);
+    await it.page.goto(BASE);
+    await it.page.locator('button', { hasText: new RegExp(`— Level ${level}\\b`) }).first().click();
+    await it.page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+    await it.page.locator('.snd-orb').waitFor({ timeout: 8000 });
+    return it;
+  }
+
+  const gameRead = (page) => page.evaluate(() => ({
+    word: document.querySelector('.snd-breath-word')?.textContent ?? null,
+    heading: document.querySelector('.snd-heading-cue')?.textContent ?? null,
+    presence: Number(
+      document.querySelector('.snd-presence-wrap [aria-valuenow]')?.getAttribute('aria-valuenow') ?? -1,
+    ),
+  }));
+
+  /**
+   * Wait for an event to be sounding — the only thing the screen still says.
+   *
+   * `settle` waits for the clearing to go quiet first, and it is not optional
+   * between two commits: the level answers a commit inside `onCommit` (the
+   * flash) but publishes the new word on the *next* frame, so for about one
+   * frame after a successful commit the screen still reads "something stirs"
+   * from the episode that has already ended. A loop that does not wait this
+   * out fires its next commit ~12ms after the last one, watches the 1.0s floor
+   * drop it, and reports a swallowed deliberate commit that never happened.
+   * That is exactly the false red this suite must not produce.
+   */
+  const quiet = (page) => page.waitForFunction(
+    () => document.querySelector('.snd-breath-word')?.textContent === 'listening',
+    null, { timeout: 25000 },
+  );
+  const anEvent = async (page, { settle = false } = {}) => {
+    if (settle) await quiet(page);
+    return page.waitForFunction(
+      () => document.querySelector('.snd-breath-word')?.textContent === 'something stirs',
+      null, { timeout: 25000 },
+    );
+  };
+
+  const footfalls = async (page) => (await page.evaluate(() => window.__bursts))
+    .filter((b) => b.freq === 150);
+
+  await t('level 2 sounds nine footfalls in three strides, on the engine\'s own clock', async () => {
+    /* The episode was lengthened from three footfalls in 2.6s to nine in
+       ~5.8s so that the regularity can be heard, located and turned toward
+       inside one exposure. That is a claim about scheduling, and the numbers
+       in the module are only a claim about arithmetic — this reads what the
+       Web Audio graph was actually asked to play. */
+    const { ctx, page } = await enterLevel(2, { rnd: OFFSET, instrument: [AUDIO_PROBE] });
+    await anEvent(page);
+    await page.waitForTimeout(8000);
+    const thuds = await footfalls(page);
+    await ctx.close();
+
+    const at = thuds.map((b) => Number((b.t - thuds[0].t).toFixed(2)));
+    assert(thuds.length === 9, `the episode sounded ${thuds.length} footfalls, not nine: ${at.join(', ')}s`);
+    const gaps = at.slice(1).map((v, i) => Number((v - at[i]).toFixed(2)));
+    const strides = [gaps[0], gaps[1], gaps[3], gaps[4], gaps[6], gaps[7]];
+    const between = [gaps[2], gaps[5]];
+    for (const s of strides) {
+      assert(
+        Math.abs(s - 0.46) <= 0.08,
+        `a footfall inside a stride landed ${s}s after the one before it, not 0.46s — the pattern `
+        + `the level calls the tell is not the pattern it plays. Onsets: ${at.join(', ')}s`,
+      );
+    }
+    for (const g of between) {
+      assert(
+        Math.abs(g - 1.36) <= 0.12,
+        `the silence between strides measured ${g}s, not the authored 1.36s (0.9s gap + one stride). `
+        + `Onsets: ${at.join(', ')}s`,
+      );
+    }
+    /* Nothing inside the episode is long enough to read as the episode having
+       stopped: the longest designed silence is the 1.36s between strides. */
+    assert(
+      Math.max(...gaps) <= 1.5,
+      `the episode goes quiet for ${Math.max(...gaps)}s in the middle of itself, which is long `
+      + 'enough to be heard as the episode having ended rather than as its rhythm',
+    );
+    assert(
+      Math.abs(at[8] - 5.44) <= 0.2,
+      `the last footfall lands at ${at[8]}s, not the authored 5.44s — the window a Seeker has to `
+      + 'turn and commit in is not the one the level was tuned for',
+    );
+  });
+
+  await t('a footfall answers the turn the Seeker just made, mid-episode', async () => {
+    /* The "getting warmer" channel is the other half of the fix, and it is the
+       half that has to be true *within* one episode: `thudGain` reads the live
+       alignment at the moment each footfall fires. Measured as the peak the
+       gain envelope ramps to, before and after a turn made in the silence
+       between the first and second stride. */
+    const { ctx, page } = await enterLevel(2, { rnd: OFFSET, instrument: [AUDIO_PROBE] });
+    await anEvent(page);
+    await page.waitForTimeout(1200);                 // through stride one
+    for (let i = 0; i < OFFSET_TURNS; i++) {
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(8);
+    }
+    await page.waitForTimeout(4600);
+    const thuds = await footfalls(page);
+    await ctx.close();
+
+    assert(thuds.length >= 7, `only ${thuds.length} footfalls were heard; the case never got past the turn`);
+    const before = thuds.slice(0, 3).map((b) => b.peak);
+    const after = thuds.slice(6, 9).map((b) => b.peak);
+    const lo = Math.max(...before);
+    const hi = Math.min(...after);
+    assert(
+      hi > lo * 2,
+      `turning toward the source mid-episode changed nothing audible: the first stride peaked at `
+      + `${before.map((v) => v.toFixed(3)).join('/')} and the last at ${after.map((v) => v.toFixed(3)).join('/')}. `
+      + 'Each footfall is meant to read the alignment at the moment it fires — that is the only '
+      + 'signal telling a Seeker whether the turn they just made helped.',
+    );
+  });
+
+  await t('a deliberate commit lands at once, and three of them finish the trial', async () => {
+    /* The floor is 1.0s and this is the pattern it must never touch: aim, tap,
+       wait for the next episode, tap again. Every tap here is a Seeker's one
+       considered commit, and every one of them has to reach the level. */
+    const { ctx, page } = await enterLevel(2, { rnd: AHEAD });
+    const steps = [];
+    const t0 = Date.now();
+    for (let n = 0; n < 3; n++) {
+      await anEvent(page, { settle: n > 0 });
+      const before = (await gameRead(page)).presence;
+      const pressedAt = Date.now();
+      await page.keyboard.press(' ');
+      await page.waitForFunction(
+        (want) => {
+          const meter = document.querySelector('.snd-presence-wrap [aria-valuenow]');
+          if (!meter) return true;          // the trial has ended
+          return Number(meter.getAttribute('aria-valuenow')) > want + 1;
+        },
+        before,
+        { timeout: 5000 },
+      ).catch(() => {});
+      const now = await gameRead(page);
+      steps.push({ answered: Date.now() - pressedAt, presence: Math.round(now.presence), heading: now.heading });
+    }
+    const ended = await page.getByText('Trial 1 of 3 complete', { exact: false })
+      .waitFor({ timeout: 20000 }).then(() => true, () => false);
+    const shown = (await page.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').trim();
+    const took = (Date.now() - t0) / 1000;
+    await ctx.close();
+    assert(
+      ended,
+      `three deliberate commits (${steps.map((s) => `${s.presence}% "${s.heading}"`).join(' → ')}) `
+      + `did not finish the trial within ${took.toFixed(0)}s. The screen reads: "${shown.slice(0, 160)}"`,
+    );
+
+    assert(
+      steps[0].presence === 33 && steps[1].presence === 67,
+      `three taps, one per episode, did not each register: presence went ${steps.map((s) => `${s.presence}%`).join(' → ')}. `
+      + 'A commit dropped by the 1.0s floor is silent, so a swallowed one looks exactly like a miss.',
+    );
+    for (const s of steps.slice(0, 2)) {
+      assert(
+        s.answered < 1200,
+        `a correctly aimed commit took ${s.answered}ms to be answered — the floor is eating deliberate play`,
+      );
+      assert(s.heading === 'noticed, clearly', `the answer to a correct commit read "${s.heading}"`);
+    }
+    assert(took < 30, `three deliberate commits took ${took.toFixed(1)}s`);
+  });
+
+  await t('a wrong commit can be corrected inside the same episode', async () => {
+    /* The briefing has always promised "if you are mistaken, nothing is lost —
+       simply keep listening", and the change under test is what finally makes
+       that true: a wrong commit no longer ends the episode. With the floor
+       above it, the promise is only kept if the corrected commit still lands
+       while the same episode is sounding. */
+    /* The wrong commit is made in the silence between the first and second
+       stride, and the footfalls are read off the audio graph either side of
+       it. That is what makes this case able to fail: `s.phase = 'idle'` in the
+       wrong branch — the line the change removed — does not leave the Seeker
+       in silence, because `s.nextAt` is still in the past, so the very next
+       frame starts a *fresh* episode at a fresh bearing. On screen that is
+       indistinguishable from the episode continuing; on the engine's clock it
+       is a footfall arriving the instant the Seeker committed, and a stride
+       grid re-anchored to it. Judging this by the word alone reports green
+       either way. */
+    const { ctx, page } = await enterLevel(2, { rnd: OFFSET, instrument: [AUDIO_PROBE] });
+    await anEvent(page);
+    await page.waitForTimeout(1150);                   // past stride one, into the gap
+    const commitAt = await page.evaluate(() => window.__bursts[window.__bursts.length - 1].t);
+    await page.keyboard.press(' ');                    // 108° off — wrong
+    await page.waitForTimeout(80);
+    const wrong = await gameRead(page);
+    for (let i = 0; i < OFFSET_TURNS; i++) {
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(6);
+    }
+    await page.waitForTimeout(1100);                   // past the 1.0s floor
+    const stillSounding = (await gameRead(page)).word;
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(250);
+    const corrected = await gameRead(page);
+    const thuds = await footfalls(page);
+    await ctx.close();
+
+    assert(
+      wrong.heading === 'nothing noticed — keep listening' && Math.round(wrong.presence) === 0,
+      `the wrong commit was answered "${wrong.heading}" at ${wrong.presence}% presence`,
+    );
+    assert(
+      stillSounding === 'something stirs',
+      'the episode had already ended before the corrected commit — this case cannot speak to '
+      + 'whether a correction inside one episode works',
+    );
+    assert(
+      Math.round(corrected.presence) === 33,
+      'the corrected commit, aimed inside tolerance and made 1.1s after the wrong one, left presence '
+      + `at ${corrected.presence}% and answered "${corrected.heading}". Correcting within the episode is `
+      + 'the whole point of no longer resetting on a wrong guess.',
+    );
+    /* And it is the same episode that carried on, not a new one that replaced
+       it — the third footfall was the last before the commit, and the fourth
+       must still land on the authored grid rather than on the commit. */
+    const after = thuds.map((b) => Number((b.t - commitAt).toFixed(2))).filter((v) => v > 0);
+    assert(
+      after.length > 0 && after[0] >= 0.9,
+      `a footfall arrived ${after[0]}s after the wrong commit. The episode was restarted by the commit `
+      + '(`s.phase = \'idle\'` with `s.nextAt` already in the past starts a fresh event, at a fresh '
+      + 'bearing, on the next frame) rather than carrying on — so a Seeker who corrects is correcting '
+      + 'toward a bearing that no longer exists.',
+    );
+    const grid = thuds.map((b) => Number((b.t - thuds[0].t).toFixed(2)));
+    const authored = [0, 0.46, 0.92, 2.28, 2.74, 3.2, 4.56, 5.02, 5.48];
+    for (let i = 0; i < Math.min(grid.length, authored.length); i++) {
+      assert(
+        Math.abs(grid[i] - authored[i]) <= 0.15,
+        `footfall ${i + 1} landed at ${grid[i]}s, not the authored ${authored[i]}s — the stride was `
+        + `re-anchored somewhere in the middle of the episode. Onsets: ${grid.join(', ')}s`,
+      );
+    }
+  });
+
+  await t('mashing cannot outrun the floor, from the keyboard or from the control', async () => {
+    /* The exploit this floor exists for: hold a turn key while mashing commit
+       and sweep the whole circle past a 40°-wide tolerance window inside one
+       episode, with no need to ever tell a rhythm from a leaf.
+     *
+       Measured as dispatch rate, because that is the thing COMMIT_MIN_INTERVAL
+       actually governs and the thing that goes red the moment it is loosened.
+       The harness presses far faster than a thumb can — that is deliberate; it
+       is an upper bound on the attack, not a simulation of one. */
+    const SECONDS = 10;
+    const runs = [];
+    for (const path of ['keyboard', 'the commit control']) {
+      const { ctx, page } = await enterLevel(2, { rnd: OFFSET, instrument: [HEADING_LOG] });
+      const btn = page.getByRole('button', { name: 'I notice this' });
+      const t0 = Date.now();
+      let presses = 0;
+      let cleared = false;
+      while (Date.now() - t0 < SECONDS * 1000) {
+        try {
+          if (path === 'keyboard') await page.keyboard.press(' ');
+          else await btn.dispatchEvent('click', { timeout: 2000 });
+          await page.keyboard.press('ArrowRight');     // sweep, as the attack does
+        } catch (e) { /* the control went away — see below */ }
+        presses++;
+        if (presses % 25 === 0 && await page.locator('.snd-controls-row').count() === 0) {
+          cleared = true;                              // the attack finished the trial
+          break;
+        }
+      }
+      const secs = (Date.now() - t0) / 1000;
+      const log = await page.evaluate(() => window.__headings);
+      await ctx.close();
+      const flashes = log.filter((e) => COMMIT_ANSWERS.includes(e.text));
+      const gaps = flashes.slice(1).map((e, i) => e.at - flashes[i].at);
+      runs.push({
+        path, presses, secs, cleared,
+        dispatched: flashes.length, minGap: gaps.length ? Math.min(...gaps) : null,
+      });
+    }
+
+    for (const r of runs) {
+      assert(
+        r.presses > 200,
+        `${r.path}: only ${r.presses} presses in ${r.secs.toFixed(1)}s — the harness never mashed hard `
+        + 'enough for this case to be about the floor',
+      );
+      assert(
+        r.dispatched <= Math.ceil(r.secs) + 1,
+        `${r.path}: ${r.presses} presses in ${r.secs.toFixed(1)}s reached the level ${r.dispatched} times `
+        + `(${(r.dispatched / r.secs).toFixed(1)}/s)${r.cleared ? ', and cleared the trial outright' : ''}. `
+        + 'COMMIT_MIN_INTERVAL is 1.0s of game-elapsed time, so at most one dispatch per second may get '
+        + 'through however fast the input arrives.',
+      );
+      assert(
+        r.minGap === null || r.minGap >= 700,
+        `${r.path}: two commits reached the level ${r.minGap}ms apart, inside the 1.0s floor`,
+      );
+    }
+    /* Both input paths, because tryCommit is shared and only one of them was
+       ever the one anybody tested by hand. */
+    assert(
+      runs.every((r) => r.dispatched > 0),
+      `a path dispatched nothing at all: ${JSON.stringify(runs)} — a floor that drops every commit `
+      + 'would pass the bound above and fail the game',
+    );
+  });
+
+  await t('level 7 is not degraded by the floor its exploit shares', async () => {
+    /* Level 7 reaches `onCommit` through the same plumbing and now shares the
+       same 1.0s floor, which was calibrated against level 2's 0.46s stride.
+       Its own shape is different — two commits, a phase change between them —
+       so the question is whether either of its two deliberate commits can be
+       swallowed. Driven by `.snd-breath-word`, which is the channel this level
+       publishes its own alignment on. */
+    const { ctx, page } = await enterLevel(7, { instrument: [HEADING_LOG] });
+    const word = () => page.evaluate(() => document.querySelector('.snd-breath-word')?.textContent ?? '');
+
+    let framed = false;
+    for (let i = 0; i < 60 && !framed; i++) {
+      if (await word() === 'a shape, steady') {
+        await page.keyboard.press(' ');
+        await page.waitForTimeout(200);
+        framed = await word() === 'listen further' || await word() === 'the true voice';
+        if (!framed) throw new Error('a commit inside phase 1 tolerance did not frame the simple voice');
+      } else {
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(50);
+      }
+    }
+    assert(framed, 'a full sweep of the circle never found the simple tick — phase 1 was never entered');
+
+    let cleared = false;
+    for (let i = 0; i < 80 && !cleared; i++) {
+      if (await word() === 'the true voice') {
+        await page.keyboard.press(' ');
+        await page.getByText('Trial 1 of 3 complete', { exact: false }).waitFor({ timeout: 20000 });
+        cleared = true;
+      } else {
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(50);
+      }
+    }
+    await ctx.close();
+    assert(
+      cleared,
+      'the commit that marks the true crossing never took. Both of level 7\'s commits are single '
+      + 'deliberate presses separated by a sweep, so neither should meet the 1.0s floor at all.',
+    );
+  });
+
+  await t('a commit does not say which kind of event is sounding', async () => {
+    /* The ground truth came off `.snd-breath-word` because naming the event
+       ("a rhythm" / "just leaves") answered the level's own discrimination
+       task for a Seeker who had not listened — and then the commit answer went
+       on naming it, one channel over. A blind commit during a rhythm read
+       "close — keep listening"; the same press during a leaf read "only the
+       wind". One press at the start of any event classified it, which is the
+       whole of what FILTER asks a Seeker to do by ear, and the press was free:
+       a wrong commit no longer ends the episode, so probing cost nothing but
+       one of the ~6 attempts the floor allows inside a 5.8s window.
+     *
+       A commit now answers the whole assertion — a true rhythm, AND inside
+       tolerance — or it answers nothing, so every way of missing reads alike.
+       This case is unchanged, and is deliberately written against the two
+       answers being indistinguishable rather than against any wording: it is
+       the guard on that collapse, and it goes red for any future edit that
+       gives one cause of a miss its own kinder message. */
+    const seen = {};
+    for (const [kind, rnd] of [['the true rhythm', OFFSET], ['a leaf decoy', LEAF]]) {
+      const { ctx, page } = await enterLevel(2, { rnd });
+      await anEvent(page);
+      const during = await gameRead(page);
+      await page.keyboard.press(' ');                  // blind, wrongly aimed
+      await page.waitForTimeout(200);
+      seen[kind] = { word: during.word, answer: (await gameRead(page)).heading };
+      await ctx.close();
+    }
+    const [a, b] = Object.values(seen);
+    assert(
+      a.word === b.word,
+      `the two kinds of event are named on screen while they sound: ${JSON.stringify(seen)}`,
+    );
+    assert(
+      a.answer === b.answer,
+      'a single blind commit tells the Seeker which kind of event is sounding: a rhythm answers '
+      + `"${a.answer}" and a leaf answers "${b.answer}". That is the classification this level `
+      + 'exists to ask for by ear, and it was just removed from .snd-breath-word for exactly that '
+      + `reason — it now lives in .snd-heading-cue instead. Seen: ${JSON.stringify(seen)}`,
+    );
+  });
+
+  await t('the answer to a commit is announced, not only drawn', async () => {
+    /* Three different outcomes — noticed / close, keep listening / only the
+       wind — are the level's entire response to the one action it offers, and
+       they are painted into `.snd-heading-cue`: 10px, uppercase, opacity 0.7,
+       no role and no live region. A Seeker who cannot see that text is told
+       nothing at all about what their commit did, and the presence meter,
+       which does move, is a `progressbar` — a value change on one of those is
+       not announced either. */
+    const { ctx, page } = await enterLevel(2, { rnd: AHEAD });
+    await anEvent(page);
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(250);
+    const m = await page.evaluate(() => {
+      const cue = document.querySelector('.snd-heading-cue');
+      const live = [...document.querySelectorAll('.snd-screen-game [aria-live], .snd-screen-game [role=status], .snd-screen-game [role=alert]')];
+      return {
+        answer: cue ? cue.textContent : null,
+        cueRole: cue ? cue.getAttribute('role') : null,
+        cueLive: cue ? cue.getAttribute('aria-live') : null,
+        fontSize: cue ? getComputedStyle(cue).fontSize : null,
+        liveRegions: live.map((n) => ({
+          what: `${n.tagName}.${String(n.className).split(' ')[0]}`,
+          text: (n.textContent || '').trim(),
+        })),
+      };
+    });
+    await ctx.close();
+
+    assert(m.answer === 'noticed, clearly', `the commit was answered "${m.answer}"`);
+    const carries = m.liveRegions.some((r) => r.text.includes(m.answer));
+    assert(
+      carries,
+      `the only answer to a commit is ${m.fontSize} text in .snd-heading-cue with role=${m.cueRole} `
+      + `and aria-live=${m.cueLive}; the live regions on this screen are `
+      + `${JSON.stringify(m.liveRegions)}. Nothing announces whether a commit was noticed, was close, `
+      + 'or found only wind, so a Seeker who is not looking at 10px of uppercase text gets no answer '
+      + 'to the one action this level has.',
+    );
+  });
+
+  await t('Space on a turn control turns; it does not also commit', async () => {
+    /* GameScreen binds its commit key to `window`, so the keystroke that
+       activates a focused control reaches the level as well. Tabbing to "Turn
+       right" and pressing Space is a request to turn — it turns *and* commits
+       at the bearing held before the turn, and the flash saying so is
+       overwritten in the same frame by the bearing readout, so nothing on
+       screen says a commit happened. It also spends the 1.0s floor, which
+       silently swallows the Seeker's next real commit. */
+    const { ctx, page } = await enterLevel(2, { rnd: AHEAD });
+    await anEvent(page);
+    await page.getByRole('button', { name: 'Turn right' }).focus();
+    const before = await gameRead(page);
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(250);
+    const after = await gameRead(page);
+    await ctx.close();
+
+    assert(Math.round(before.presence) === 0, `presence was already ${before.presence}% before the press`);
+    assert(
+      after.heading !== before.heading,
+      'the turn control did not turn, so this case is measuring the wrong thing',
+    );
+    assert(
+      Math.round(after.presence) === 0,
+      `Space with the turn control focused committed as well as turning — presence went `
+      + `${before.presence}% → ${after.presence}% and the screen reads "${after.heading}", which is the `
+      + 'bearing readout, not an answer to a commit. The window keydown handler does not ask whether '
+      + 'the key was already handled by the control that had focus.',
     );
   });
 

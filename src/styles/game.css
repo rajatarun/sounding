@@ -345,6 +345,23 @@ body.snd-noscroll {
   opacity: 0.7;
 }
 
+/* Visually hidden, not display:none — a screen reader still reaches it.
+   Used for .snd-announce, which carries only the discrete answer to a
+   commit (never the continuous bearing readout .snd-heading-cue shares
+   that text with — announcing every degree of a turn would be its own
+   defect). */
+.snd-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .snd-controls-row {
   width: 100%;
   padding: 0 var(--tantu-knot-8);

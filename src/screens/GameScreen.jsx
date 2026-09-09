@@ -76,6 +76,11 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const [orb, setOrbState] = useState({ strength: 0, notice: false });
   const [word, setWordState] = useState('listening');
   const [heading, setHeading] = useState('facing forward');
+  // Mirrors only the discrete answer to a commit, never the continuous
+  // bearing text .snd-heading-cue also carries — that text changes on every
+  // degree of a turn, and a live region announcing all of it would drown
+  // out the one thing here worth announcing. See flash() below.
+  const [announcement, setAnnouncement] = useState('');
   const [breatheHeld, setBreatheHeld] = useState(false);
   const [depth, setDepth] = useState(0);
   const [finishing, setFinishing] = useState(null);
@@ -182,6 +187,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       setWord(w) { setWordState(w); },
       flash(msg) {
         setHeading(msg);
+        setAnnouncement(msg);
         clearTimeout(flashTimeoutRef.current);
         flashTimeoutRef.current = setTimeout(() => {
           if (runningRef.current) setHeading(headingTextFor(steering));
@@ -248,7 +254,16 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       if (!runningRef.current || showWelcomeRef.current) return;
       if (e.key === 'ArrowLeft') steering.turn(-8);
       if (e.key === 'ArrowRight') steering.turn(8);
-      if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') tryCommit();
+      if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') {
+        // A focused button already answers Space/Enter with its own click —
+        // a turn button included. Without this check, tabbing to "Turn
+        // right" and pressing Space both turns (the button's own onClick)
+        // and commits (this handler, because keydown still reaches window
+        // regardless of focus), spending the 1.0s commit floor on a press
+        // that was never meant to be a commit at all.
+        const consumedByButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON';
+        if (!consumedByButton) tryCommit();
+      }
     }
     window.addEventListener('keydown', onKeyDown);
 
@@ -328,6 +343,16 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       <div className="snd-control-badge">
         {steers ? `steering · ${gyroActive ? 'phone compass' : 'swipe'}` : 'breath · hold and release'}
       </div>
+
+      {/* The only answer a commit gets is 10px text at opacity 0.7 in
+          .snd-heading-cue — nothing for a Seeker who isn't looking at it.
+          This mirrors the same message, but only the discrete flash, never
+          the continuous bearing readout that element also carries — an
+          `aria-live` on that text would announce every degree of a turn.
+          Deliberately not part of `.snd-bottom`'s column: that stack is a
+          layout contract (every child in flow, `position: static`, see the
+          test guarding it) and this has no visual position to hold. */}
+      {steers && <div className="snd-sr-only" role="status" aria-live="polite">{announcement}</div>}
 
       {/* The field is the level's feedback — presence, the word, the orb — and
           it belongs to every level. Only the *steering* half of it is
