@@ -206,10 +206,19 @@ const submit = (page) => page.locator('.snd-account button[type=submit]');
 const fieldError = (page) => page.locator('.snd-account .tantu-field-error');
 const notice = (page) => page.locator('.snd-account .tantu-notice');
 
-/* Level 1's four-rung alignment word, in order. It is the only continuous-ish
-   channel the level still publishes to the DOM since the orb stopped carrying
-   a reading, and both `holdLevelOne` and the welcome group steer by it. */
-const LEVEL_ONE_RUNGS = { listening: 0, faint: 1, closer: 2, here: 3 };
+/* The presence meter's live value — the one alignment-dependent channel a
+   level is still entitled to publish, and therefore the only one this harness
+   may steer by. `holdLevelOne` sweeps on it.
+
+   It used to steer by `.snd-breath-word`, whose rungs were thresholds on the
+   same `align` the orb's removed `scale()` carried. That the harness could
+   sweep the circle on it, bisect, and turn back to the best rung *was the
+   defect*: a driver with no ears solving level 1 off the glass is exactly the
+   sighted-player shortcut the orb removal was for. The word now reports only
+   cumulative presence, so this reads presence directly and openly instead. */
+const presenceNow = (page) => page.evaluate(() => Number(
+  document.querySelector('.snd-presence-wrap [aria-valuenow]')?.getAttribute('aria-valuenow') ?? -1,
+));
 
 const focused = (page) => page.evaluate(() => {
   const el = document.activeElement;
@@ -747,25 +756,33 @@ try {
          only inside the 60–85 band, at 2.5/s, so the mark is about ten seconds
          of keeping the fire in its band.
        *
-         This used to read temperature straight off the orb's inline scale —
-         `setOrb(temp / 100)` — and that readout no longer exists: the orb
-         carries nothing continuous now (see the welcome group below). The only
-         channel this level still publishes heat on is `.snd-breath-word`,
-         which names three bands and nothing finer: below 45, 45–80, above 80.
-         Three rungs cannot hold a hand inside the 60–85 band that scores, so
-         the harness integrates the level's own rates and treats each word
-         boundary as a fix to correct the running estimate against. */
+         This level has now had two heat readouts taken off it. First the orb's
+         inline scale, `setOrb(temp / 100)`. Then `.snd-breath-word`, which
+         named the band's two edges and its middle — "too hot — ease back" /
+         "feed it more" / "holding true heat" — and which this controller used
+         to drive off directly. That is worth being plain about: a bang-bang
+         loop with no ears held the fire inside its scoring band on those three
+         strings alone, which means the screen was not hinting at the answer,
+         it was the answer. The word now reports cumulative progress and
+         nothing about heat.
+       *
+         What is left is `orb.notice`, the discrete overheat flag above 80 —
+         sanctioned, never continuous, and never the thing that was wrong here.
+         So the harness integrates the level's own rates and uses the flag as
+         its one recurring fix-point: hold until the fire says it is too hot,
+         release to 70, repeat. Both ends of that swing sit inside 60–85, and
+         the release lands within a poll of the flag, far short of the 1.2 s
+         that would trip the overheat. One sensor, one bit, once a cycle. */
       controller: () => {
         let temp = 20;        // the level's own starting value
         let at = null;
         let held = false;
-        return (word, now) => {
-          if (at !== null) temp += (held ? 22 : -12) * ((now - at) / 1000);
-          at = now;
-          if (word === 'too hot — ease back') temp = Math.max(temp, 81);
-          else if (word === 'feed it more') temp = Math.min(temp, 44);
-          else temp = Math.min(Math.max(temp, 46), 79);
-          held = temp < 68;   // bang-bang about the middle of the scoring band
+        return (now, clock) => {
+          if (at !== null) temp += (held ? 22 : -12) * ((clock - at) / 1000);
+          at = clock;
+          if (now.notice) temp = Math.max(temp, 81);  // the only fix-point left
+          if (held && temp >= 81) held = false;
+          else if (!held && temp <= 70) held = true;
           return held;
         };
       },
@@ -804,6 +821,8 @@ try {
     const sample = () => page.evaluate(() => ({
       depth: document.querySelector('.snd-screen-game')?.getAttribute('data-depth') ?? 'no screen',
       word: document.querySelector('.snd-breath-word')?.textContent ?? '',
+      // The overheat flag, which is level 9's only remaining published cue.
+      notice: Boolean(document.querySelector('.snd-orb-notice')),
     }));
 
     await hand(true);
@@ -816,7 +835,7 @@ try {
     while (Date.now() < deadline) {
       const now = await sample();
       if (now.depth !== '0') { crossed = true; break; }
-      await hand(drive(now.word, Date.now()));
+      await hand(drive(now, Date.now()));
       await page.waitForTimeout(150);
     }
     await page.waitForTimeout(1600); // the filter ladder's own transition
@@ -1132,6 +1151,67 @@ try {
     );
   });
 
+  await t('the field\'s word carries no alignment reading either', async () => {
+    /* The sibling of the case above, and it was reported by a player, not
+       found here: with the orb clean, `.snd-breath-word` was still publishing
+       a live quantizer on `align` — level 1's "listening / faint / closer /
+       here" — and a screenshot of the word "faint" moving with the phone is
+       what opened this. Same defect, one element over, and arguably worse: a
+       word ladder read continuously gives up its BOUNDARY CROSSINGS, and
+       `.snd-heading-cue` prints the degrees to plot them against, so the two
+       together locate a source far more precisely than either rung names.
+     *
+       Asserted the way a player would notice it: sweep the circle at a speed
+       a hand can actually turn a phone, and read what the screen said. The
+       word may only report cumulative presence, and a sweep earns none, so a
+       full circle must publish exactly one word. Walked on the levels that
+       hold a fixed bearing (1, 3, 8) — three different ladders, three
+       Disciplines, and level 1 is the one in the screenshot. */
+    for (const level of [1, 3, 8]) {
+      const { ctx, page } = await open({
+        config: false,
+        progress: { done: [], next: { level, trial: 1 }, revealed: [], everPlayed: true },
+      });
+      await page.locator('button', { hasText: new RegExp(`— Level ${level}\\b`) }).first().click();
+      await page.getByRole('button', { name: /Begin, Unhurried/i }).click();
+      await page.locator('.snd-orb').waitFor({ timeout: 8000 });
+
+      const said = new Set();
+      const heard = new Set();
+      for (let i = 0; i < 46; i++) {   // 46 × 8° clears a full circle
+        said.add(await page.evaluate(() => document.querySelector('.snd-breath-word')?.textContent ?? ''));
+        heard.add(await page.evaluate(() => document.querySelector('.snd-heading-cue')?.textContent ?? ''));
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(120);
+      }
+      const presence = await presenceNow(page);
+      await ctx.close();
+
+      assert(
+        heard.size > 20,
+        `level ${level}: the sweep only ever saw ${heard.size} heading(s), so the arrow keys were `
+        + 'not steering and this case measured nothing',
+      );
+      /* A sweep does cross the source, so it banks a little presence honestly —
+         about 1.6% at this step rate, which is the sanctioned channel working
+         exactly as designed. What it must not do is reach the first mark at
+         25%, because past that a rung would have been EARNED and the case
+         could no longer tell a given-away rung from a paid-for one. */
+      assert(
+        presence < 25,
+        `level ${level}: the sweep banked ${presence.toFixed(1)}% presence and reached the 25% mark, `
+        + 'so it earned a rung honestly and cannot speak to whether one was given away. Sweep faster.',
+      );
+      assert(
+        said.size === 1,
+        `level ${level}: a full sweep of the circle, earning no presence, published `
+        + `${said.size} different words — ${[...said].map((w) => `"${w}"`).join(', ')}. `
+        + 'The word answers to cumulative presence and nothing else; anything that changes as the '
+        + 'Seeker turns is the bearing being read off the glass, which is the whole of pillar 2.',
+      );
+    }
+  });
+
   await t('the account screen survives forced colors', async () => {
     const { ctx, page } = await open({
       forcedColors: 'active',
@@ -1286,16 +1366,19 @@ try {
     const start = await read();
     assert(start.modal === 'true', 'the welcome is not a modal, so this case is measuring the wrong thing');
 
-    /* Sweep for the draft and hold it, exactly as holdLevelOne does — with the
-       welcome still up and never dismissed. */
-    let best = { r: -1, i: 0 };
+    /* Steer a full circle and settle, with the welcome still up and never
+       dismissed. Blind, because it has to be: this used to climb the word's
+       alignment rungs to find the draft, and that channel is gone on purpose
+       (see `presenceNow`). What the case actually turns on is unchanged and
+       is asserted below — whether steering under the scrim moved the two
+       things that cost the Seeker something, presence and the first mark. A
+       blind sweep still reaches every bearing, so if the keydown handler is
+       ungated it will spend real time inside tolerance. */
     for (let i = 0; i < 45; i++) {
-      const r = LEVEL_ONE_RUNGS[(await read()).word] ?? -1;
-      if (r > best.r) best = { r, i };
       await page.keyboard.press('ArrowRight');
       await page.waitForTimeout(30);
     }
-    for (let i = 0; i < 45 - best.i; i++) {
+    for (let i = 0; i < 22; i++) {
       await page.keyboard.press('ArrowLeft');
       await page.waitForTimeout(20);
     }
@@ -1305,11 +1388,11 @@ try {
 
     assert(end.modal === 'true', 'the welcome dismissed itself during the case');
     assert(
-      best.r < 3,
-      'the arrow keys steered the level through a dialog that declares aria-modal="true" — '
-      + `the sweep reached "${Object.keys(LEVEL_ONE_RUNGS)[best.r]}" with the panel still open. `
-      + 'aria-modal is a promise that nothing outside the panel is reachable; GameScreen binds its '
-      + 'keydown handler to window and does not check showWelcome.',
+      end.word === start.word,
+      `the field's word moved from "${start.word}" to "${end.word}" with the panel still open. `
+      + 'It reports cumulative presence and nothing else, so it can only have moved by the level '
+      + 'running: the arrow keys steered through a dialog that declares aria-modal="true", which '
+      + 'is a promise that nothing outside the panel is reachable.',
     );
     assert(
       end.presence <= 0,
@@ -1909,36 +1992,57 @@ try {
        same 1.0s floor, which was calibrated against level 2's 0.46s stride.
        Its own shape is different — two commits, a phase change between them —
        so the question is whether either of its two deliberate commits can be
-       swallowed. Driven by `.snd-breath-word`, which is the channel this level
-       publishes its own alignment on. */
+       swallowed.
+     *
+       This used to read aim off `.snd-breath-word` — "a shape, steady" meant
+       inside phase 1's tolerance, "the true voice" meant inside phase 2's —
+       and that is precisely the readout that has been removed: it handed over,
+       free and continuously, the aim the commit is supposed to buy. So the
+       harness now buys it. It commits its way around the circle and reads the
+       flash, which is the level's own earned answer and the only channel that
+       states aim. That makes the case a harder version of itself: every probe
+       is a real commit, so the 1.0s floor this case is *about* is now the
+       thing gating the search as well as the two presses that matter.
+     *
+       Steps of 24° against a 40°-wide phase-1 window (±20°) and a 28°-wide
+       phase-2 window (±14°) guarantee a sample inside each. */
     const { ctx, page } = await enterLevel(7, { instrument: [HEADING_LOG] });
-    const word = () => page.evaluate(() => document.querySelector('.snd-breath-word')?.textContent ?? '');
+    const cue = () => page.evaluate(() => document.querySelector('.snd-heading-cue')?.textContent ?? '');
+    const beat = () => page.locator('.snd-beat').count();
+    /* One deliberate commit, then far enough clear of the 1.0s floor that the
+       next probe is never dropped for arriving too soon. */
+    const probe = async () => {
+      await page.keyboard.press(' ');
+      await page.waitForTimeout(250);
+      const said = await cue();
+      await page.waitForTimeout(900);
+      return said;
+    };
+    const step = async () => {
+      for (let k = 0; k < 3; k++) {  // 3 × 8° = 24°
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(30);
+      }
+    };
 
     let framed = false;
-    for (let i = 0; i < 60 && !framed; i++) {
-      if (await word() === 'a shape, steady') {
-        await page.keyboard.press(' ');
-        await page.waitForTimeout(200);
-        framed = await word() === 'listen further' || await word() === 'the true voice';
-        if (!framed) throw new Error('a commit inside phase 1 tolerance did not frame the simple voice');
-      } else {
-        await page.keyboard.press('ArrowRight');
-        await page.waitForTimeout(50);
-      }
+    for (let i = 0; i < 18 && !framed; i++) {
+      framed = (await probe()) === 'a shape, at least';
+      if (!framed) await step();
     }
-    assert(framed, 'a full sweep of the circle never found the simple tick — phase 1 was never entered');
+    assert(
+      framed,
+      'eighteen commits around the whole circle never marked the simple tick — phase 1 was never '
+      + `entered. The flashes were ${JSON.stringify(await page.evaluate(() => window.__headings.map((h) => h.text)))}`,
+    );
 
     let cleared = false;
-    for (let i = 0; i < 80 && !cleared; i++) {
-      if (await word() === 'the true voice') {
-        await page.keyboard.press(' ');
-        await page.getByText('Trial 1 of 3 complete', { exact: false }).waitFor({ timeout: 20000 });
-        cleared = true;
-      } else {
-        await page.keyboard.press('ArrowRight');
-        await page.waitForTimeout(50);
-      }
+    for (let i = 0; i < 18 && !cleared; i++) {
+      await probe();
+      cleared = (await beat()) > 0;
+      if (!cleared) await step();
     }
+    if (cleared) await page.getByText('Trial 1 of 3 complete', { exact: false }).waitFor({ timeout: 20000 });
     await ctx.close();
     assert(
       cleared,
@@ -2117,18 +2221,23 @@ try {
 }
 
 /**
- * Level 1: find the draft by sweeping the circle, then hold. The keyboard
- * turns 8° a press and the tolerance is 14°, so the best of a full sweep is
- * always inside it.
+ * Level 1: find the draft by sweeping the circle, then stop. The keyboard
+ * turns 8° a press and the tolerance is 14°, so every bearing in the circle is
+ * sampled to within half the tolerance and a hit is guaranteed.
  *
- * The sweep used to be steered by the orb's inline `scale()` — the continuous
- * alignment reading — and that reading has been removed on purpose, so this
- * climbs `.snd-breath-word` instead: the four-rung ladder level 1 still
- * publishes (listening / faint / closer / here). Coarser, and enough, because
- * the rungs are thresholds on the same `align` the removed scale carried.
- * A harness with no ears has to read *some* visible channel; if this one goes
- * too, level 1 becomes undriveable from a test and this helper is where that
- * shows up first.
+ * Two sensors have now been taken off this level on purpose — the orb's inline
+ * `scale()`, then `.snd-breath-word`'s alignment rungs — because both let a
+ * player who never listened read `align` straight off the glass. What is left
+ * is the presence meter, and presence is only alignment-dependent in the one
+ * way the design intends: it rises solely while the Seeker is inside tolerance
+ * and floors at zero everywhere else. So the sweep dwells at each bearing and
+ * asks a single yes/no question — did presence leave zero — instead of reading
+ * a gradient and bisecting it.
+ *
+ * That is deliberately a worse instrument than the one it replaces, and the
+ * cost is wall-clock: it dwells rather than skimming, so a sweep is seconds
+ * rather than milliseconds. A harness with no ears SHOULD find this level slow
+ * and awkward; when it did not, that was the finding.
  */
 /**
  * Clear the one-time welcome if this device has never played before. A trial
@@ -2144,22 +2253,18 @@ async function pastTheWelcome(page) {
 }
 
 async function holdLevelOne(page) {
-  const rung = () => page.evaluate(() => document.querySelector('.snd-breath-word')?.textContent ?? '');
-  let best = { r: -1, i: 0 };
-  for (let i = 0; i < 45; i++) {
-    const r = LEVEL_ONE_RUNGS[await rung()] ?? -1;
-    if (r > best.r) best = { r, i };
+  /* 350ms inside tolerance is 100/24 × 0.35 ≈ 1.5 points of presence, which
+     the meter publishes as a whole number above zero; the same dwell outside
+     it leaves presence floored at zero. Nothing to bisect, and nothing to read
+     when the answer is no. */
+  for (let i = 0; i <= 45; i++) {
+    await page.waitForTimeout(350);
+    if (await presenceNow(page) > 0) return;
     await page.keyboard.press('ArrowRight');
-    await page.waitForTimeout(40);
   }
-  if (best.r < 0) {
-    throw new Error('level 1 published no alignment word at any bearing in a full sweep — '
-      + 'the harness has no channel left to steer by');
-  }
-  for (let i = 0; i < 45 - best.i; i++) {
-    await page.keyboard.press('ArrowLeft');
-    await page.waitForTimeout(25);
-  }
+  throw new Error('presence never left zero at any bearing in a full sweep of level 1 — '
+    + 'either the draft is unreachable or the meter has stopped publishing a value, and the '
+    + 'harness has no channel left that it is allowed to steer by');
 }
 
 console.log(`\n${pass} passed, ${failures.length} failed\n`);

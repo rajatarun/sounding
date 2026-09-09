@@ -38,9 +38,98 @@
  */
 
 import { angleDiff, alignment } from '../engine/input.js';
-import { DISCIPLINES, FORCES, DEPTHS } from '../engine/constants.js';
+import {
+  DISCIPLINES, FORCES, DEPTHS, PRESENCE_MARKS, MARK_REARM,
+} from '../engine/constants.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/* ── The word in the field ──────────────────────────────────────────────────
+ *
+ * `.snd-breath-word` is the one line of text a level publishes while it is
+ * being played, and for the whole life of this file it was a live readout of
+ * the exact hidden scalar the Seeker was supposed to be estimating by ear.
+ * Level 1 shipped `aligned ? 'here' : align > 0.6 ? 'closer' : align > 0.3 ?
+ * 'faint' : 'listening'` — a three-threshold quantizer on `align`, recomputed
+ * every frame, printed on the glass.
+ *
+ * THIS IS THE ORB DEFECT, ONE ELEMENT OVER. The orb's `scale(orbScale)` was
+ * removed because it was a continuous, zero-latency, hardware-independent
+ * readout of `align` — not a shortcut so much as a strictly better sensor than
+ * the audio, with none of the audio's thresholds, equal-loudness tilt or HRTF
+ * ambiguity. Every argument in that removal applies here unchanged. A word
+ * ladder is coarser than a scale factor, and coarser is not the same as safe:
+ *
+ *   - It is sampled continuously. A Seeker sweeping the circle does not read
+ *     one word, they read every BOUNDARY CROSSING, and two contour lines
+ *     bracket the source far more precisely than either rung names. Level 1's
+ *     `align > 0.3` edge and its `> 0.6` edge, bisected, locate a source to
+ *     within a few degrees against a tolerance of 14.
+ *   - `.snd-heading-cue` prints the bearing in degrees, one metre away on the
+ *     same screen. The word supplies the contour, the heading supplies the
+ *     axis to plot it against. Together they are a protractor.
+ *   - It resolves the ambiguity the ear cannot. Front-to-back separation in
+ *     this build measures 1.4 dB (CLAUDE.md § Known limits) — the single
+ *     hardest read in the game. The word answers front-versus-back instantly,
+ *     unambiguously, and for free. So it does not merely duplicate the audio
+ *     channel; it carries information the audio genuinely does not.
+ *
+ * The evidence that this is reachable is not hypothetical and was not found by
+ * a player. `scripts/ui.e2e.mjs` drove level 1 to completion by sweeping the
+ * circle reading this word and turning back to the best rung, and drove level
+ * 9's forge to its first presence mark with a closed-loop controller fed by
+ * nothing but the three temperature words. A harness with no ears cleared two
+ * levels off this channel alone. That is the whole finding.
+ *
+ * THE RULE, AND IT IS THE MECHANISM RATHER THAN THE WORDING: the word may
+ * report only what the Seeker has ALREADY EARNED, never what they are trying
+ * to estimate. Concretely it is a function of cumulative presence and of
+ * nothing else — the same scalar the meter draws, the same one `[data-depth]`
+ * grades. Presence is a sanctioned channel: it is on screen already, it is
+ * deterministic, and reading it tells a Seeker nothing they did not do. It
+ * cannot be bisected against a bearing because it does not move when you turn
+ * — it moves when you have stayed.
+ *
+ * `ladderWord` below is how a level says that, and `checkWordSource` in
+ * contract.js is what stops the next edit saying it the old way: a setWord
+ * argument may not name the alignment family, and may not compare anything to
+ * a numeric literal. Thresholds go in the ladder, never in the call.
+ *
+ * Level 2 is the one level that does not use this and is not a leak. Its word
+ * says an event is sounding and never which KIND — the classification is the
+ * task, and that half was taken off this channel already; see the long block
+ * about its commit answer below.
+ *
+ * WHAT THIS COSTS, said plainly rather than buried. Levels 4 and 9 lose the
+ * only explicit statement of the thing they ask for — level 4 no longer says
+ * whether you are in phase with the cave, level 9 no longer names the heat
+ * band. Those levels get harder in a way that is not a tuning change: they
+ * now require the ear they were always described as requiring. Level 9's
+ * upper edge survives on `orb.notice`, which is a discrete flag and was never
+ * the problem; its lower edge is now audible-only. Whether that reads or
+ * frustrates is a question for a real playtest, not for this comment.
+ */
+
+/**
+ * The rung of a fixed word ladder that cumulative progress has reached.
+ *
+ * Mirrors GameScreen's own mark logic exactly — the same thresholds, the same
+ * `MARK_REARM` hysteresis — so the word, the meter and the `[data-depth]`
+ * ladder cannot disagree about how deep a trial has got. The hysteresis is not
+ * cosmetic: without it a Seeker resting on a threshold sees the word flicker in
+ * time with their own alignment, which is the readout coming back in miniature.
+ *
+ * `marks` is overridable for a level whose own reveal ladder is the honest
+ * index (level 6's depths). It must be thresholds on EARNED progress; anything
+ * a bearing can move belongs nowhere near this function.
+ */
+function ladderWord(s, ladder, progress, marks = PRESENCE_MARKS) {
+  let i = s.rung ?? 0;
+  while (i < marks.length && progress >= marks[i]) i++;
+  while (i > 0 && progress < marks[i - 1] - MARK_REARM) i--;
+  s.rung = i;
+  return ladder[Math.min(i, ladder.length - 1)];
+}
 
 /* ── The room ───────────────────────────────────────────────────────────────
  *
@@ -343,6 +432,15 @@ export const FIRST_NARROWING = [
      */
     depthAt: [0, 45, 80],
 
+    /**
+     * The field's word, by how long the draft has been held — never by where
+     * the Seeker is facing. This ladder used to be `align > 0.6 ? 'closer' :
+     * align > 0.3 ? 'faint' : 'listening'`, which is the level's own hidden
+     * bearing printed on the glass at 60 Hz; see the block at the top of this
+     * file. Nothing here can be read before it has been earned.
+     */
+    words: ['listening', 'the dark gives a little', 'cold, and moving', 'a way out, breathing'],
+
     briefing:
       'You wake in <b>total darkness</b>. No fire, no torch, no wall to trust. ' +
       'Somewhere in this cave, a single draft of outside air moves — a thread of ' +
@@ -420,7 +518,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.hold);
       ctx.setOrb(align);
-      ctx.setWord(aligned ? 'here' : align > 0.6 ? 'closer' : align > 0.3 ? 'faint' : 'listening');
+      ctx.setWord(ladderWord(s, this.words, s.hold));
 
       if (s.hold >= 100) ctx.complete();
     },
@@ -581,6 +679,9 @@ export const FIRST_NARROWING = [
     decaySeconds: 13,  // raised to keep the decay:accrual ratio roughly where
                        // it was before the tolerance widened
 
+    /** By held progress, not by facing — see the block at the top of this file. */
+    words: ['listening', 'one breath holds steady', 'the climb, unmistakable', 'the air smells of outside'],
+
     briefing:
       'Three passages breathe into this chamber. Two gust and wander. One ' +
       '<b>climbs</b> — its pitch rising steadily, breath by breath, toward the ' +
@@ -651,7 +752,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.hold);
       ctx.setOrb(trueAlign);
-      ctx.setWord(aligned ? 'here' : trueAlign > 0.6 ? 'closer' : 'listening');
+      ctx.setWord(ladderWord(s, this.words, s.hold));
 
       if (s.hold >= 100) ctx.complete();
     },
@@ -676,6 +777,18 @@ export const FIRST_NARROWING = [
 
     /** The plain verb for `breathe` — the first level with no steering at all. */
     actionLine: 'Hold the button while the wind rises; release as it falls.',
+
+    /**
+     * By accumulated sync, not by whether this instant is in phase.
+     *
+     * The old word was `matched ? 'in rhythm' : 'settling in'` — a live,
+     * per-frame in-phase flag, which is the entire judgement this level asks
+     * the Seeker to make by ear. Holding the button flat and watching for the
+     * flip read the cave's breath period off the screen without hearing it.
+     * These four say only how far the two rhythms have come together, which is
+     * what the meter beside them already says.
+     */
+    words: ['settling in', 'two rhythms, nearly', 'the cave takes it up', 'one breath, both of you'],
 
     briefing:
       'A door hides in the rock, sealed by nothing but rhythm. The cave itself is ' +
@@ -749,7 +862,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.sync);
       ctx.setOrb(s.sync / 100);
-      ctx.setWord(s.sync > 75 ? 'almost one breath' : matched ? 'in rhythm' : 'settling in');
+      ctx.setWord(ladderWord(s, this.words, s.sync));
 
       if (s.sync >= 100) ctx.complete();
     },
@@ -778,6 +891,9 @@ export const FIRST_NARROWING = [
     tolerance: 16,
     holdSeconds: 26,
     decaySeconds: 45, // very forgiving; the ember dims slowly
+
+    /** By the spark fed, not by facing — the crackle rate is the only cue. */
+    words: ['faint, and dying', 'the ember remembers', 'it glows', 'it catches'],
 
     briefing:
       'A dead ember waits in a blind hollow, one spark from catching. You cannot ' +
@@ -822,7 +938,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.spark);
       ctx.setOrb(align);
-      ctx.setWord(s.spark > 70 ? 'it catches' : aligned ? 'steady' : 'faint');
+      ctx.setWord(ladderWord(s, this.words, s.spark));
 
       if (s.spark >= 100) {
         ctx.audio.burst({
@@ -855,6 +971,21 @@ export const FIRST_NARROWING = [
     // Cumulative hold, as a percentage, at which each successive depth
     // (DEPTHS: Shell, Current, Weather, Lattice, Core) reveals itself.
     depthAt: [0, 20, 45, 70, 90],
+
+    /**
+     * One word per depth, on the same ladder the layers themselves open on —
+     * `depthAt`, minus its leading 0, which is the rung every trial starts at.
+     * These are the DEPTHS the briefing promises are under each other, and
+     * they arrive only by having held. See the block at the top of this file
+     * for the gate that used to sit in front of them.
+     */
+    words: [
+      'cold surface',
+      'something moves beneath',
+      'a slow pulse, deeper',
+      'the rock itself hums',
+      'warmth, at the root of it',
+    ],
 
     /**
      * Per-layer level trim, and the fix for this level's real defect.
@@ -945,18 +1076,15 @@ export const FIRST_NARROWING = [
         v.gain.gain.setTargetAtTime(target, now, i === 0 ? 0.25 : 0.6);
       });
 
-      const depthIdx = this.depthAt.filter((th) => s.hold >= th).length - 1;
-      const words = [
-        'cold surface',
-        'something moves beneath',
-        'a slow pulse, deeper',
-        'the rock itself hums',
-        'warmth, at the root of it',
-      ];
-
       ctx.setPresence(s.hold);
       ctx.setOrb(align);
-      ctx.setWord(aligned ? words[Math.max(0, depthIdx)] : 'listening');
+      // The five depth words were always the right idea — they name a layer
+      // the Seeker has opened, which is earned and cannot be read early. The
+      // leak was the gate they hung on: `aligned ? words[...] : 'listening'`
+      // is a live binary "you are inside 15°", published every frame, and a
+      // Seeker sweeping the circle reads the tolerance window straight off it.
+      // Same words, indexed by this level's own reveal ladder and nothing else.
+      ctx.setWord(ladderWord(s, this.words, s.hold, this.depthAt.slice(1)));
 
       if (s.hold >= 100) ctx.complete();
     },
@@ -1025,7 +1153,13 @@ export const FIRST_NARROWING = [
         }
         ctx.setPresence(0);
         ctx.setOrb(alignSimple, false);
-        ctx.setWord(angleDiff(ctx.yaw, s.simpleAngle) <= this.tolerance ? 'a shape, steady' : 'ticking, somewhere');
+        // This level has no cumulative presence to ladder — it publishes 0 and
+        // then 60 — so its word reports the only earned thing it has: which
+        // phase the Seeker's own commit has moved it into. It used to report
+        // `angleDiff(yaw, simpleAngle) <= tolerance`, a live aim check, which
+        // is the same ground truth the commit is supposed to buy and gave it
+        // away for nothing. The commit flashes below stay the earned answer.
+        ctx.setWord('ticking, somewhere');
         return;
       }
 
@@ -1054,7 +1188,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(60);
       ctx.setOrb(alignTrue, true);
-      ctx.setWord(angleDiff(ctx.yaw, s.trueAngle) <= this.trueTolerance ? 'the true voice' : 'listen further');
+      ctx.setWord('something slower, underneath');
     },
 
     onCommit(s, ctx) {
@@ -1095,6 +1229,9 @@ export const FIRST_NARROWING = [
     tolerance: 13,
     holdSeconds: 30,
     decaySeconds: 12,
+
+    /** By the true call held, not by facing — the echoes are the whole problem. */
+    words: ['echo, and echo again', 'something small under the din', 'clearer, and late', 'someone is there'],
 
     briefing:
       'Across this valley, someone answers when you call — but a call thrown ' +
@@ -1157,7 +1294,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.hold);
       ctx.setOrb(align);
-      ctx.setWord(aligned ? 'clean, close' : align > 0.5 ? 'nearly' : 'echo, not it');
+      ctx.setWord(ladderWord(s, this.words, s.hold));
 
       if (s.hold >= 100) ctx.complete();
     },
@@ -1183,6 +1320,28 @@ export const FIRST_NARROWING = [
     control: 'breathe',
     holdSeconds: 40,   // cumulative time within the healthy band
     decaySeconds: 16,
+
+    /**
+     * By the melt earned, not by the heat.
+     *
+     * This is the largest single removal in this pass and it deserves naming.
+     * The word here was `s.temp > 80 ? 'too hot — ease back' : s.temp < 45 ?
+     * 'feed it more' : 'holding true heat'` — the two edges of the band and
+     * the middle, printed live. That is not a hint toward the answer, it IS
+     * the answer: hold until the first, release until the second, repeat, and
+     * the level completes with the sound off. The e2e harness does exactly
+     * that, and it is committed, so a deaf bang-bang controller clearing this
+     * level is not a hypothesis.
+     *
+     * What the Seeker keeps: the fire bed's own level and brightness, which
+     * track temperature continuously (gain 0.05→0.30, centre 220→820 Hz), and
+     * `orb.notice` above 80 — a discrete overheat flag, the sanctioned kind of
+     * signal, and never the thing that was wrong here. What they lose is the
+     * lower edge, which is now audible-only. Whether 45 is findable by ear at
+     * this mix is a real question and I cannot answer it from the source;
+     * it wants a phone, headphones and a quiet room.
+     */
+    words: ['the ore is cold', 'the ore softens', 'it runs at the edges', 'nearly liquid'],
 
     briefing:
       'Ore won’t go liquid on its own. The bellows need breath — but a ' +
@@ -1242,7 +1401,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.progress);
       ctx.setOrb(s.temp / 100, s.temp > 80);
-      ctx.setWord(s.temp > 80 ? 'too hot — ease back' : s.temp < 45 ? 'feed it more' : 'holding true heat');
+      ctx.setWord(ladderWord(s, this.words, s.progress));
 
       if (s.progress >= 100) ctx.complete();
     },
@@ -1271,6 +1430,9 @@ export const FIRST_NARROWING = [
     tolerance: 18,
     holdSeconds: 38,
     decaySeconds: 20,
+
+    /** By how long you have stayed with it, not by whether you are on it now. */
+    words: ['tracking', 'staying with it', 'it turns, and you turn', 'the wind cannot lose you'],
 
     briefing:
       'The fire is lit, and a squall has found it. The wind won’t sit ' +
@@ -1310,9 +1472,11 @@ export const FIRST_NARROWING = [
       // every frame and gusts it by up to +/-70 degrees, but the panner was
       // placed once in init() and never moved again — so in the one level whose
       // whole premise is that the source will not hold still, the source did
-      // not move. Gain and the on-screen word tracked the new bearing while the
-      // binaural image stayed nailed to wherever the wind started, which is a
-      // confidently false spatial cue in the level that closes The Trace.
+      // not move. Gain tracked the new bearing (and so, at the time, did the
+      // on-screen word) while the binaural image stayed nailed to wherever the
+      // wind started — a confidently false spatial cue in the level that closes
+      // The Trace. The word no longer reports a bearing at all; the panner
+      // move is what carries it now, which is the correct channel for it.
       ctx.audio.movePanner(s.voice.panner, s.threatAngle);
 
       const align = alignment(ctx.yaw, s.threatAngle);
@@ -1340,7 +1504,7 @@ export const FIRST_NARROWING = [
 
       ctx.setPresence(s.hold);
       ctx.setOrb(align);
-      ctx.setWord(aligned ? 'here, again' : align > 0.5 ? 'it moved' : 'tracking');
+      ctx.setWord(ladderWord(s, this.words, s.hold));
 
       if (s.hold >= 100) ctx.complete();
     },

@@ -5,7 +5,7 @@
  * below is a real bug that shipped in this project and survived review, or a
  * malformation the runtime would fail silently on.
  */
-import { checkLevels, checkAudioSource } from '../src/levels/contract.js';
+import { checkLevels, checkAudioSource, checkWordSource } from '../src/levels/contract.js';
 import { DISCIPLINES, FORCES } from '../src/engine/constants.js';
 
 let pass = 0; const failures = [];
@@ -160,6 +160,73 @@ t('accepts a scaled gain write, inline or via a local', () => {
   assert(checkAudioSource('v.gain.setTargetAtTime(0.2 * ctx.audio.audioScale, now, 0.25);').length === 0, 'inline scale flagged');
   assert(checkAudioSource('const target = 0.4 * ctx.audio.audioScale;\nv.gain.setTargetAtTime(target, now, 0.6);').length === 0,
     'scale via local variable flagged');
+});
+
+console.log('\nThe field\'s word (source text)\n' + '─'.repeat(52));
+
+t('catches every alignment readout the first ten levels actually shipped', () => {
+  /* Not invented cases. These are the exact expressions that stood in
+     first-narrowing.js — a live quantizer on the hidden scalar of each level,
+     redrawn every frame next to a heading readout in degrees. A player
+     reported seeing them; the committed e2e harness had been steering by them
+     for longer than that. Asserted verbatim so the checker is proven against
+     the defect rather than against a paraphrase of it. */
+  const shipped = [
+    // level 1 — three thresholds on `align`, plus the tolerance flag
+    "ctx.setWord(aligned ? 'here' : align > 0.6 ? 'closer' : align > 0.3 ? 'faint' : 'listening');",
+    // level 3 — the same, on the true draft of three
+    "ctx.setWord(aligned ? 'here' : trueAlign > 0.6 ? 'closer' : 'listening');",
+    // level 4 — a phase detector: `matched` is the whole judgement by ear
+    "ctx.setWord(s.sync > 75 ? 'almost one breath' : matched ? 'in rhythm' : 'settling in');",
+    // level 5
+    "ctx.setWord(s.spark > 70 ? 'it catches' : aligned ? 'steady' : 'faint');",
+    // level 6 — a live "inside 15°" gate in front of an otherwise earned ladder
+    "ctx.setWord(aligned ? words[Math.max(0, depthIdx)] : 'listening');",
+    // level 7, both phases — the aim the commit is supposed to buy, for free
+    "ctx.setWord(angleDiff(ctx.yaw, s.simpleAngle) <= this.tolerance ? 'a shape, steady' : 'ticking, somewhere');",
+    "ctx.setWord(angleDiff(ctx.yaw, s.trueAngle) <= this.trueTolerance ? 'the true voice' : 'listen further');",
+    // level 8
+    "ctx.setWord(aligned ? 'clean, close' : align > 0.5 ? 'nearly' : 'echo, not it');",
+    // level 9 — both edges of the scoring band and the middle, i.e. the answer
+    "ctx.setWord(s.temp > 80 ? 'too hot — ease back' : s.temp < 45 ? 'feed it more' : 'holding true heat');",
+    // level 10
+    "ctx.setWord(aligned ? 'here, again' : align > 0.5 ? 'it moved' : 'tracking');",
+  ];
+  for (const call of shipped) {
+    assert(has(checkWordSource(call), 'word-readout', 'error'), `not flagged: ${call}`);
+  }
+});
+
+t('accepts a ladder indexed by earned progress, and a constant', () => {
+  /* What the fix looks like: the thresholds live in a declared ladder the
+     level owns, and the call names only cumulative progress — the scalar the
+     presence meter already draws, which cannot be read before it is earned
+     and does not move when the Seeker turns. */
+  assert(checkWordSource('ctx.setWord(ladderWord(s, this.words, s.hold));').length === 0,
+    'a presence-indexed ladder was flagged');
+  assert(checkWordSource('ctx.setWord(ladderWord(s, this.words, s.hold, this.depthAt.slice(1)));').length === 0,
+    "level 6's own depth ladder was flagged");
+  assert(checkWordSource("ctx.setWord('ticking, somewhere');").length === 0, 'a constant word was flagged');
+});
+
+t("accepts level 2's word, which says something is sounding and never what", () => {
+  /* The one conditional word that is not a readout: it reports that an event
+     is live, never its class, and the classification is the entire task The
+     Filter is being trained on here. It names no bearing and thresholds
+     nothing, so the rule lets it through — which is the line the rule is
+     drawn to sit on. */
+  assert(checkWordSource("ctx.setWord(eventActive ? 'something stirs' : 'listening');").length === 0,
+    "level 2's event word was flagged");
+});
+
+t('catches a bearing readout that never says "align"', () => {
+  /* Both halves of the rule earn their place. A level can publish its hidden
+     bearing without ever naming the alignment family, and can threshold a
+     hidden scalar that has nothing to do with bearing at all. */
+  assert(has(checkWordSource("ctx.setWord(angleDiff(ctx.yaw, s.a) < 12 ? 'here' : 'no');"), 'word-readout', 'error'),
+    'angleDiff without the word "align" not flagged');
+  assert(has(checkWordSource("ctx.setWord(s.temp >= 60 ? 'hot' : 'cold');"), 'word-readout', 'error'),
+    'a threshold on a non-bearing hidden scalar not flagged');
 });
 
 console.log(`\n${pass} passed, ${failures.length} failed\n`);
