@@ -18,6 +18,26 @@ const REARM = MARK_REARM;
 const BEAT_MS = 2100;
 
 /**
+ * Floor on how often a `commit`-control level's `onCommit` can fire, in
+ * game-elapsed seconds. This is a rate limit on the INPUT, not a penalty on
+ * being wrong: a wrong commit still costs nothing per attempt (see pillar 3
+ * and CLAUDE.md's "Level 2 lets you guess wrong with no penalty"), but
+ * nothing stopped it from being repeated fast enough to substitute for
+ * listening entirely. Without this, holding a turn key (which repeats under
+ * normal OS key-repeat) while mashing Space/Enter/click sweeps the whole
+ * circle past any level's tolerance window within a single short episode —
+ * a wall-clock-cheap way to "win" that requires no discrimination at all.
+ * Lives here rather than in any one level's `onCommit` because it is a
+ * property of the shared commit plumbing (every keydown and every click
+ * reaches `tryCommit` with no debounce of its own) and every `commit`-
+ * control level shares the exposure — level 2's rhythm-vs-leaf judgement and
+ * level 7's phase-1 static bearing both go through this same path. ~1.0s is
+ * roughly 2x level 2's 0.46s footfall stride: a genuine single deliberate
+ * commit per real judgement is unaffected; only sub-second mashing is.
+ */
+const COMMIT_MIN_INTERVAL = 1.0;
+
+/**
  * The one line this game says out loud, and only once — the first time any
  * Seeker ever enters a trial, gated on the same `firstEver` flag level 1
  * already uses to soften its opening (see `state.onboarding` in
@@ -56,6 +76,11 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const [orb, setOrbState] = useState({ strength: 0, notice: false });
   const [word, setWordState] = useState('listening');
   const [heading, setHeading] = useState('facing forward');
+  // Mirrors only the discrete answer to a commit, never the continuous
+  // bearing text .snd-heading-cue also carries — that text changes on every
+  // degree of a turn, and a live region announcing all of it would drown
+  // out the one thing here worth announcing. See flash() below.
+  const [announcement, setAnnouncement] = useState('');
   const [breatheHeld, setBreatheHeld] = useState(false);
   const [depth, setDepth] = useState(0);
   const [finishing, setFinishing] = useState(null);
@@ -76,6 +101,9 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
   const screenRef = useRef(null);
   const commitRef = useRef(() => {});
   const markRef = useRef(0);
+  // Game-elapsed time (matches ctx.elapsed) of the last onCommit that was
+  // actually dispatched — see COMMIT_MIN_INTERVAL above.
+  const lastCommitAtRef = useRef(-Infinity);
   // Read inside the frame loop and the window keydown handler, both set up
   // once in the mount effect below and closed over `showWelcome` at that
   // moment only — a ref is what lets them see it change.
@@ -159,6 +187,7 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       setWord(w) { setWordState(w); },
       flash(msg) {
         setHeading(msg);
+        setAnnouncement(msg);
         clearTimeout(flashTimeoutRef.current);
         flashTimeoutRef.current = setTimeout(() => {
           if (runningRef.current) setHeading(headingTextFor(steering));
@@ -210,6 +239,13 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
 
     function tryCommit() {
       if (!runningRef.current || !level.onCommit) return;
+      // Rate-limited, not penalised: a commit inside the floor is dropped
+      // silently — no flash, no state change, nothing the level even sees —
+      // so mashing costs nothing and gains nothing, same as a single wrong
+      // commit does. See COMMIT_MIN_INTERVAL.
+      const now = elapsedRef.current;
+      if (now - lastCommitAtRef.current < COMMIT_MIN_INTERVAL) return;
+      lastCommitAtRef.current = now;
       level.onCommit(state, levelCtx());
     }
     commitRef.current = tryCommit;
@@ -218,7 +254,16 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       if (!runningRef.current || showWelcomeRef.current) return;
       if (e.key === 'ArrowLeft') steering.turn(-8);
       if (e.key === 'ArrowRight') steering.turn(8);
-      if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') tryCommit();
+      if ((e.key === ' ' || e.key === 'Enter') && level.control === 'commit') {
+        // A focused button already answers Space/Enter with its own click —
+        // a turn button included. Without this check, tabbing to "Turn
+        // right" and pressing Space both turns (the button's own onClick)
+        // and commits (this handler, because keydown still reaches window
+        // regardless of focus), spending the 1.0s commit floor on a press
+        // that was never meant to be a commit at all.
+        const consumedByButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON';
+        if (!consumedByButton) tryCommit();
+      }
     }
     window.addEventListener('keydown', onKeyDown);
 
@@ -298,6 +343,16 @@ export function GameScreen({ level, trial, firstEver, gyroActive, audio, steerin
       <div className="snd-control-badge">
         {steers ? `steering · ${gyroActive ? 'phone compass' : 'swipe'}` : 'breath · hold and release'}
       </div>
+
+      {/* The only answer a commit gets is 10px text at opacity 0.7 in
+          .snd-heading-cue — nothing for a Seeker who isn't looking at it.
+          This mirrors the same message, but only the discrete flash, never
+          the continuous bearing readout that element also carries — an
+          `aria-live` on that text would announce every degree of a turn.
+          Deliberately not part of `.snd-bottom`'s column: that stack is a
+          layout contract (every child in flow, `position: static`, see the
+          test guarding it) and this has no visual position to hold. */}
+      {steers && <div className="snd-sr-only" role="status" aria-live="polite">{announcement}</div>}
 
       {/* The field is the level's feedback — presence, the word, the orb — and
           it belongs to every level. Only the *steering* half of it is

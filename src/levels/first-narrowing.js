@@ -20,7 +20,11 @@
  *                                 plays; a level may use it to soften an initial
  *                                 condition, never to change its mechanic
  *   update(state, dt, t, ctx)   — per frame; call ctx.complete() to finish
- *   onCommit(state, ctx)        — only for control: 'commit'
+ *   onCommit(state, ctx)        — only for control: 'commit'. GameScreen rate-
+ *                                 limits dispatch to it (COMMIT_MIN_INTERVAL,
+ *                                 ~1s) — a level never sees calls faster than
+ *                                 that, so it need not (and must not) build
+ *                                 its own commit-mashing guard
  *   onBreathe(state, held)      — only for control: 'breathe'
  *   cleanup(state)              — stop any oscillators started in init
  *   completionText(state)       — { text, sub }
@@ -177,6 +181,138 @@ const SETTLE = {
   color: 'brown', filterType: 'lowpass', freq: 120, Q: 0.7, dur: 2.6, attack: 0.9, gain: 0.24,
 };
 
+/* ── Level 2's rhythm cue ───────────────────────────────────────────────────
+ *
+ * Player feedback: "I don't understand level 2 at all, rhythm is barely
+ * visible and frustrating without having any clue." Tracing the loop —
+ * cue, decision window, action, feedback — the break wasn't the audio
+ * itself, it was the window around it.
+ *
+ * A rhythm episode used to be three footfalls (0.46 s apart) and then
+ * nothing: 2.6 seconds total, at a bearing drawn fresh for that one
+ * episode, with every footfall at the same fixed gain regardless of where
+ * the Seeker was facing. That asks a Seeker to notice a three-pulse
+ * pattern, classify it as the true rhythm, localise a bearing from it, turn
+ * a phone or body to within `tolerance`, and commit — all inside one
+ * exposure with no signal telling them whether the turn they'd just made
+ * helped. Get any part of that wrong once and the sound is gone; the next
+ * episode starts over at a new, unrelated bearing. That is a blind
+ * single-shot guess wearing a discrimination task's clothes, not a skill a
+ * Seeker can build over repeated tries within one episode.
+ *
+ * Two changes, both structural rather than louder:
+ *
+ * 1. The three-footfall stride now repeats RHYTHM_GROUPS times per episode
+ *    (still 0.46 s apart within a stride — that spacing is the pattern
+ *    being taught, untouched) instead of firing once and ending. The
+ *    episode runs RHYTHM_DURATION (~5.8 s, was 2.6 s) — room to actually
+ *    hear the regularity repeat, not just once, and room to turn.
+ * 2. Each footfall's gain now answers the Seeker's CURRENT alignment to the
+ *    episode's bearing (thudGain), not a fixed 0.35 regardless of facing.
+ *    That gives this level the "getting warmer" channel every hold level in
+ *    this file already has and this one never did — a channel that answers
+ *    back within the same episode, not just across separate guesses.
+ *
+ * Peak gain at full alignment is unchanged (0.35, RHYTHM_THUD_GAIN) — this
+ * is not a louder mix, it is gain that now varies with facing instead of
+ * being constant regardless of it.
+ *
+ * A game-theory review of this same change caught what removing the
+ * per-wrong-commit episode reset opened up: with wrong commits no longer
+ * ending the episode, and GameScreen's commit path having no rate limit of
+ * its own, a Seeker could hold a turn key (OS key-repeat) while mashing
+ * commit and sweep the whole circle past `tolerance` well inside one
+ * episode — clearing the level at a wall-clock cost competitive with actual
+ * listening, with no need to ever tell a rhythm from a leaf. That gap was
+ * general to every `commit`-control level (level 7's static phase-1 bearing
+ * has the identical exposure, reset or no reset), so the fix is
+ * `COMMIT_MIN_INTERVAL` in `GameScreen.jsx`'s `tryCommit`, not anything
+ * local to this level: it floors the interval between dispatched
+ * `onCommit` calls per trial. A commit inside that floor is dropped
+ * silently — pillar 3 still holds, a wrong (or too-fast) commit costs
+ * nothing — it just can't be repeated fast enough to substitute for
+ * listening.
+ *
+ * AND THEN THE COMMIT ANSWER ITSELF WAS THE LEAK. Removing the per-wrong-
+ * commit reset made a wrong commit free, which is right; what it also did was
+ * make the commit answer a free oracle, which is not. The three answers used
+ * to decompose the Seeker's assertion into its two halves and report each
+ * separately: "only the wind" whenever no rhythm was sounding, "close — keep
+ * listening" whenever one was and the aim was off. So a single press at the
+ * first instant of any event named its class, with no listening, no aim and
+ * no wait — the same ground truth that had just been taken off
+ * `.snd-breath-word` for exactly that reason, moved one channel over and
+ * gated behind one keypress instead of zero.
+ *
+ * That is a pillar-3 defect and NOT a clear-rate exploit, and the difference
+ * matters for what the fix has to be. Commits are free, so knowing which kind
+ * of event is sounding buys almost no wall-clock: a blind masher at the 1.0 s
+ * floor lands a commit with probability P(a rhythm is sounding) × P(inside
+ * tolerance) = 0.247 × (40/360) = 0.0275, so ~109 dispatches — about 109 s of
+ * uninterrupted mashing — for the three this trial needs, with or without the
+ * leak. (Duty cycle: mean event 0.4 × 5.78 + 0.6 × 0.9 = 2.85 s against a mean
+ * 6.5 s idle gap; rhythms occupy 2.312/9.352 = 0.247 of the clock.) What the
+ * leak actually cost was the Discipline: two Seekers with genuinely different
+ * ears cleared at the same rate, because the classification FILTER exists to
+ * train was being handed over rather than heard.
+ *
+ * THE FIX IS THAT A COMMIT ANSWERS THE WHOLE ASSERTION OR NOTHING. A commit
+ * says "there is a true rhythm, and it is *there*"; the level confirms that
+ * conjunction or it does not, and it never reports the halves separately.
+ * Every way of not landing — nothing sounding, a leaf, or the true rhythm at a
+ * bearing outside `tolerance` — answers with the one string below.
+ *
+ * Measured as information: a blind press used to carry the full H(0.4) = 0.971
+ * bits of the event's class. It now carries 0.061 bits — P(rhythm) moves 0.400
+ * → 0.372 on a miss — and that residue is only the fact that succeeding is
+ * itself evidence, which is not a leak but the task being done.
+ *
+ * The Seeker loses nothing they were entitled to. "Am I getting warmer?" is
+ * still answered inside the same episode, by `thudGain`, at 0.46 s resolution,
+ * in the channel this level is about — nine footfalls whose gain reads the
+ * live alignment. The old "close" flash was a redundant, silent, visual copy
+ * of that channel that also gave away the half the ear was supposed to earn.
+ * Moving the answer out of text and back into the mechanic is pillar 1.
+ */
+
+/**
+ * The answer to a commit that did not land. ONE string for every way of not
+ * landing, and the sameness is the mechanic — not a shortage of copy.
+ *
+ * Do not split it back into a per-cause set, however much better three
+ * specific answers read than one general one. Anything that distinguishes
+ * "no rhythm was sounding" from "a rhythm was sounding and you were aimed
+ * wrong" hands over the classification this level exists to ask for by ear.
+ * `scripts/ui.e2e.mjs` § 'a commit does not say which kind of event is
+ * sounding' is the guard, and it is written against the two cases being
+ * indistinguishable, not against any particular wording.
+ *
+ * It is deliberately about the Seeker's act and silent about the world:
+ * "nothing noticed", not "only the wind". A Seeker who correctly heard the
+ * rhythm and simply aimed 30° off is not wrong about the clearing, and a
+ * level whose whole job is teaching that judgement must not tell them they
+ * were. It also keeps the briefing's own promise verbatim — "if you are
+ * mistaken, nothing is lost — simply keep listening" — and pairs with the
+ * commit label ("I notice this") and the success answer ("noticed, clearly"),
+ * so all three sit on one verb and the contrast between them is legible.
+ */
+const COMMIT_MISS = 'nothing noticed — keep listening';
+const RHYTHM_STEPS = 3;        // footfalls per stride — unchanged, this is
+                                // the pattern ("the regularity IS the tell")
+const RHYTHM_STRIDE = 0.46;    // seconds between footfalls — unchanged
+const RHYTHM_GROUP_GAP = 0.9;  // silence between stride repeats
+const RHYTHM_GROUPS = 3;       // stride repeats per episode (was 1)
+const RHYTHM_CYCLE = RHYTHM_STEPS * RHYTHM_STRIDE + RHYTHM_GROUP_GAP; // 2.28s
+const RHYTHM_TOTAL_THUDS = RHYTHM_STEPS * RHYTHM_GROUPS; // 9, was 3
+const RHYTHM_DURATION = (RHYTHM_GROUPS - 1) * RHYTHM_CYCLE
+  + (RHYTHM_STEPS - 1) * RHYTHM_STRIDE + 0.3; // ~5.78s, was 2.6s
+const RHYTHM_THUD_GAIN = 0.35; // peak gain, at full alignment — unchanged
+/** Firing time of the k-th footfall (0-indexed) relative to episode start. */
+const thudTime = (k) => Math.floor(k / RHYTHM_STEPS) * RHYTHM_CYCLE
+  + (k % RHYTHM_STEPS) * RHYTHM_STRIDE;
+/** Louder as the Seeker turns toward the episode's bearing; never louder
+ *  than the old fixed value at full alignment. */
+const thudGain = (align) => RHYTHM_THUD_GAIN * (0.3 + 0.7 * Math.pow(align, 1.6));
 
 export const FIRST_NARROWING = [
   {
@@ -344,7 +480,7 @@ export const FIRST_NARROWING = [
       if (s.phase === 'idle' && t >= s.nextAt) {
         s.angle = Math.floor(Math.random() * 360);
         if (Math.random() < 0.4) {
-          s.phase = 'rhythm'; s.thuds = 0; s.startedAt = t; s.endsAt = t + 2.6;
+          s.phase = 'rhythm'; s.thuds = 0; s.startedAt = t; s.endsAt = t + RHYTHM_DURATION;
         } else {
           s.phase = 'leaf'; s.endsAt = t + 0.9;
           ctx.audio.burst({
@@ -355,11 +491,18 @@ export const FIRST_NARROWING = [
       }
 
       if (s.phase === 'rhythm') {
-        // Three evenly spaced footfalls — the regularity IS the tell.
-        while (s.thuds < 3 && t - s.startedAt >= s.thuds * 0.46) {
+        // Three evenly spaced footfalls, repeated RHYTHM_GROUPS times — the
+        // regularity IS the tell, and it now repeats long enough to actually
+        // be recognised, located and turned toward instead of heard once and
+        // gone. Each footfall reads the Seeker's alignment AT THE MOMENT IT
+        // FIRES, so a Seeker who turns closer during the episode hears the
+        // next footfall answer that turn — the "getting warmer" channel this
+        // cue never had before.
+        while (s.thuds < RHYTHM_TOTAL_THUDS && t - s.startedAt >= thudTime(s.thuds)) {
+          const align = alignment(ctx.yaw, s.angle);
           ctx.audio.burst({
             angleDeg: s.angle, color: 'crackle', filterType: 'lowpass',
-            freq: 150, Q: 0.6, dur: 0.22, gain: 0.35, attack: 0.005,
+            freq: 150, Q: 0.6, dur: 0.22, attack: 0.005, gain: thudGain(align),
           });
           s.thuds++;
         }
@@ -371,29 +514,52 @@ export const FIRST_NARROWING = [
         s.nextAt = t + 4 + Math.random() * 5;
       }
 
-      const active = s.phase === 'rhythm';
-      ctx.setOrb(active ? 0.75 : s.phase === 'leaf' ? 0.3 : 0.12, active);
-      ctx.setWord(active ? 'a rhythm' : s.phase === 'leaf' ? 'just leaves' : 'listening');
+      // Neither channel says which KIND of event this is — that
+      // classification is the whole discrimination task this level asks the
+      // Seeker to do by ear. Naming it on screen ("a rhythm" vs "just
+      // leaves") used to answer FILTER's own question for them regardless of
+      // whether they had listened at all; both words now only say something
+      // is happening, never what.
+      const eventActive = s.phase !== 'idle';
+      ctx.setOrb(eventActive ? 0.6 : 0.12, false);
+      ctx.setWord(eventActive ? 'something stirs' : 'listening');
       ctx.setPresence((s.found / this.required) * 100);
     },
 
     onCommit(s, ctx) {
-      if (s.phase !== 'rhythm') { ctx.flash('only the wind'); return; }
+      // A commit asserts BOTH halves at once — "there is a true rhythm, and it
+      // is there" — so it is tested as one conjunction and answered as one
+      // thing. The three cases that fail it (nothing sounding, a leaf, the
+      // rhythm at a bearing outside tolerance) are deliberately not told
+      // apart; see COMMIT_MISS. Keep this a single branch: written as an early
+      // return per cause, the next edit that wants a kinder message for one of
+      // them reopens the oracle without anyone noticing.
+      const landed = s.phase === 'rhythm'
+        && angleDiff(ctx.yaw, s.angle) <= this.tolerance;
 
-      if (angleDiff(ctx.yaw, s.angle) <= this.tolerance) {
-        s.found++;
-        ctx.audio.burst({
-          angleDeg: s.angle, color: 'crackle', filterType: 'highpass',
-          freq: 900, dur: 0.4, gain: 0.22,
-        });
-        s.phase = 'idle';
-        s.nextAt = ctx.elapsed + 3;
-        ctx.flash('noticed, clearly');
-        if (s.found >= this.required) ctx.complete();
-      } else {
-        s.phase = 'idle';
-        ctx.flash('close — keep listening');
+      if (!landed) {
+        // Nothing else changes. The episode, if one is sounding, keeps
+        // sounding rather than ending on a wrong guess — the briefing promises
+        // "if you are mistaken, nothing is lost — simply keep listening", and
+        // ending it here made that false the moment anyone acted on it,
+        // because the only thing left to keep listening to was silence. A
+        // Seeker who turned too far hears the same footfalls, hears them come
+        // up as they turn back (thudGain), and can commit again inside this
+        // episode's own window. That warming is now the only answer to "was
+        // that a rhythm, and where?" — which is the point.
+        ctx.flash(COMMIT_MISS);
+        return;
       }
+
+      s.found++;
+      ctx.audio.burst({
+        angleDeg: s.angle, color: 'crackle', filterType: 'highpass',
+        freq: 900, dur: 0.4, gain: 0.22,
+      });
+      s.phase = 'idle';
+      s.nextAt = ctx.elapsed + 3;
+      ctx.flash('noticed, clearly');
+      if (s.found >= this.required) ctx.complete();
     },
 
     completionText: () => ({
